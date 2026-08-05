@@ -21,6 +21,10 @@ The following names are importable from `retrieval_lab`:
 - `BaseRetriever`
 - `KeywordRetriever`
 - `BM25Retriever`
+- `DenseRetriever`
+- `EmbeddingBackend`
+- `EmbeddingModelMetadata`
+- `OptionalDependencyError`
 - `FixedSizeChunker`
 - `EvaluationDataset`
 - `RelevanceLevel`
@@ -65,6 +69,17 @@ class BaseRetriever(ABC):
 
 Results are ordered best-first and ranks are contiguous from one. Implementations
 must use deterministic tie-breaking.
+
+`BaseRetriever.settings` returns deterministic, JSON-compatible implementation
+settings for the run manifest. The manifest keeps its existing `retrievers` list
+and records detailed values separately under `retriever_settings`.
+
+`DenseRetriever` performs exact inner-product search. It defaults to
+`intfloat/multilingual-e5-small`, applies `query: ` and `passage: ` prefixes, and
+normalizes document and query vectors unless `normalize_embeddings=False` is set.
+It accepts a typed `EmbeddingBackend` for custom embedding services. The default
+sentence-transformers adapter is lazy; install it only when needed with
+`pip install retrieval-lab[dense]`.
 
 ## Runner contract
 

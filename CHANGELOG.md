@@ -16,4 +16,6 @@ Versioning once the first public release is published.
 - Dataset-to-corpus validation for document and chunk relevance.
 - Evaluation of precomputed document rankings through the public Python API.
 - Dependency-free deterministic BM25 with replaceable tokenization.
+- Optional exact dense retrieval with typed embedding backends, lazy model loading,
+  and reproducible model settings.
 - Shared six-metric evaluation engine and canonical dataset hashing.

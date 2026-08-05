@@ -1,8 +1,12 @@
 from retrieval_lab import (
     BM25Retriever,
+    DenseRetriever,
     Document,
+    EmbeddingBackend,
+    EmbeddingModelMetadata,
     EvaluationDataset,
     EvaluationRunner,
+    OptionalDependencyError,
     RetrievalLabError,
     RetrievedQueryResult,
     evaluate_results,
@@ -21,6 +25,10 @@ def test_package_root_and_compatibility_modules_share_public_types() -> None:
 
 def test_new_milestone_apis_are_available_from_the_package_root() -> None:
     assert BM25Retriever.__module__ == "retrieval_lab.retrievers.bm25"
+    assert DenseRetriever.__module__ == "retrieval_lab.retrievers.dense"
+    assert EmbeddingBackend.__module__ == "retrieval_lab.retrievers.dense"
+    assert EmbeddingModelMetadata.__module__ == "retrieval_lab.retrievers.dense"
+    assert OptionalDependencyError.__module__ == "retrieval_lab.exceptions"
     assert EvaluationDataset.__module__ == "retrieval_lab.datasets"
     assert RetrievedQueryResult.__module__ == "retrieval_lab.evaluation.precomputed"
     assert evaluate_results.__module__ == "retrieval_lab.evaluation.precomputed"

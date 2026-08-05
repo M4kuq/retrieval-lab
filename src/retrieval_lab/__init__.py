@@ -18,11 +18,19 @@ from retrieval_lab.exceptions import (
     DatasetValidationError,
     EvaluationError,
     IncomparableRunError,
+    OptionalDependencyError,
     RetrievalLabError,
     RetrieverContractError,
 )
 from retrieval_lab.loaders import load_documents
-from retrieval_lab.retrievers import BaseRetriever, BM25Retriever, KeywordRetriever
+from retrieval_lab.retrievers import (
+    BaseRetriever,
+    BM25Retriever,
+    DenseRetriever,
+    EmbeddingBackend,
+    EmbeddingModelMetadata,
+    KeywordRetriever,
+)
 from retrieval_lab.runner import EvaluationRunner
 
 __all__ = [
@@ -32,7 +40,10 @@ __all__ = [
     "ConfigurationError",
     "CorpusValidationError",
     "DatasetValidationError",
+    "DenseRetriever",
     "Document",
+    "EmbeddingBackend",
+    "EmbeddingModelMetadata",
     "EvaluationDataset",
     "EvaluationError",
     "EvaluationQuery",
@@ -41,6 +52,7 @@ __all__ = [
     "FixedSizeChunker",
     "IncomparableRunError",
     "KeywordRetriever",
+    "OptionalDependencyError",
     "QueryEvaluation",
     "RelevanceLevel",
     "RetrievalLabError",
