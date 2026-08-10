@@ -29,6 +29,7 @@ from retrieval_lab.retrievers import (
     DenseRetriever,
     EmbeddingBackend,
     EmbeddingModelMetadata,
+    HybridRetriever,
     KeywordRetriever,
 )
 from retrieval_lab.runner import EvaluationRunner
@@ -50,6 +51,7 @@ __all__ = [
     "EvaluationResult",
     "EvaluationRunner",
     "FixedSizeChunker",
+    "HybridRetriever",
     "IncomparableRunError",
     "KeywordRetriever",
     "OptionalDependencyError",
