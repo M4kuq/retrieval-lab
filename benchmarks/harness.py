@@ -343,7 +343,7 @@ def _integer_mapping(value: object) -> dict[str, JSONValue]:
 
 def _environment() -> dict[str, JSONValue]:
     try:
-        version = importlib_metadata.version("retrieval-lab-sdk")
+        version = importlib_metadata.version("retrieval-lab")
     except importlib_metadata.PackageNotFoundError:
         version = "unknown"
     return {

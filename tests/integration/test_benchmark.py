@@ -76,7 +76,7 @@ def test_benchmark_cold_warm_report_is_strict_and_reproducible(
     assert set(runs["cold"]["metrics"]) == {"keyword", "bm25"}
     assert loaded["environment"]["python"]
     assert loaded["environment"]["retrieval_lab_version"] == importlib_metadata.version(
-        "retrieval-lab-sdk"
+        "retrieval-lab"
     )
     assert loaded["started_at_utc"].endswith("Z")
     assert loaded["finished_at_utc"].endswith("Z")
