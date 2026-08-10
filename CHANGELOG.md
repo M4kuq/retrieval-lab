@@ -40,6 +40,8 @@ Versioning once the first public release is published.
   text/strict JSON output, query evidence inspection, and stable exit codes.
 - Added offline saved-run regression fixtures, a public GitHub Actions gate
   example, active CI gate assertions, and wheel/optional-install smoke checks.
+- Added an offline Japanese tutorial corpus, executable Python examples, FAQ,
+  and a reproducible BM25 notebook with deterministic validation.
 
 ### Migration notes
 

@@ -1,0 +1,4 @@
+{"query_id":"q-retrieval","query":"検索ランキングの評価","relevant":[{"id":"retrieval.md","relevance":3},{"id":"evaluation.md","relevance":1}],"reference_answer":"ランキング指標で検索品質を確認します。","metadata":{"topic":"検索"}}
+{"query_id":"q-cache","query":"キャッシュと再現性","relevant":[{"id":"cache.md","relevance":3}],"reference_answer":"キャッシュは実行時の再構築を減らします。","metadata":{"topic":"再現性"}}
+{"query_id":"q-metrics","query":"Recall MRR 指標","relevant":[{"id":"evaluation.md","relevance":3},{"id":"retrieval.md","relevance":1}],"reference_answer":"Recall と MRR はランキング品質を測ります。","metadata":{"topic":"指標"}}
+{"query_id":"q-offline","query":"オフラインの安全性と秘密情報","relevant":[{"id":"safety.md","relevance":3},{"id":"cache.md","relevance":1}],"reference_answer":"ローカルの入力だけで評価し秘密情報を含めません。","metadata":{"topic":"安全性"}}

@@ -307,3 +307,8 @@ absolute paths, secrets, or external resources.
 Saved-run CI usage is documented in `docs/ci-regression.md`. The checked-in
 fixtures and `examples/github-actions/retrieval-quality-gate.yml` show the
 offline `gate` command, baseline artifact contract, and stable exit statuses.
+
+The offline first-run walkthrough is in `docs/tutorial.md`; operational caveats
+for metrics, relevance levels, latency, Dense dependencies, caches, and
+comparability are collected in `docs/faq.md`. All tutorial code uses the public
+package API.
