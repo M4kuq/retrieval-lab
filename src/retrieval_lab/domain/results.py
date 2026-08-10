@@ -305,14 +305,105 @@ class EvaluationResult:
             raise EvaluationError("Evaluation result could not be serialized") from exc
         return f"{payload}\n"
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> EvaluationResult:
+        """Reconstruct a validated result from its canonical dictionary."""
+
+        from retrieval_lab.artifacts.results import result_from_dict
+
+        return result_from_dict(payload)
+
+    @classmethod
+    def from_json(cls, text: str) -> EvaluationResult:
+        """Reconstruct a result from JSON text; ``text`` is never treated as a path."""
+
+        from retrieval_lab.artifacts.results import result_from_json
+
+        return result_from_json(text)
+
+    @classmethod
+    def load_json(
+        cls,
+        path: str | os.PathLike[str],
+        *,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> EvaluationResult:
+        """Load a UTF-8 result JSON file with strict validation and size bounds."""
+
+        from retrieval_lab.artifacts.results import load_result
+
+        return load_result(path, max_bytes=max_bytes)
+
+    def summary(self) -> str:
+        """Return deterministic plain-text metrics without writing to stdout."""
+
+        from retrieval_lab.reporting.summary import result_summary
+
+        return result_summary(self)
+
+    def to_summary_csv(self) -> str:
+        """Return aggregate metrics and latency as deterministic long-form CSV."""
+
+        from retrieval_lab.reporting.csv import summary_csv
+
+        return summary_csv(self)
+
+    def to_per_query_csv(self) -> str:
+        """Return per-query metrics as deterministic long-form CSV."""
+
+        from retrieval_lab.reporting.csv import per_query_csv
+
+        return per_query_csv(self)
+
+    def save_summary_csv(self, path: str | os.PathLike[str]) -> None:
+        """Atomically save aggregate metrics as UTF-8 CSV."""
+
+        from retrieval_lab.artifacts.results import _atomic_write_text
+
+        _atomic_write_text(path, self.to_summary_csv())
+
+    def save_per_query_csv(self, path: str | os.PathLike[str]) -> None:
+        """Atomically save per-query metrics as UTF-8 CSV."""
+
+        from retrieval_lab.artifacts.results import _atomic_write_text
+
+        _atomic_write_text(path, self.to_per_query_csv())
+
+    def save_csv(self, output_dir: str | os.PathLike[str]) -> tuple[Path, Path]:
+        """Atomically save ``summary.csv`` and ``per_query.csv`` in a directory."""
+
+        try:
+            output = Path(output_dir)
+        except (TypeError, ValueError) as exc:
+            raise EvaluationError("CSV output directory must be a valid path") from exc
+        summary_path = output / "summary.csv"
+        per_query_path = output / "per_query.csv"
+        self.save_summary_csv(summary_path)
+        self.save_per_query_csv(per_query_path)
+        return summary_path, per_query_path
+
+    def to_html(self) -> str:
+        """Return a standalone escaped HTML report with no external resources."""
+
+        from retrieval_lab.reporting.html import result_html
+
+        return result_html(self)
+
+    def save_html(self, path: str | os.PathLike[str]) -> None:
+        """Atomically save a standalone UTF-8 HTML report."""
+
+        from retrieval_lab.artifacts.results import _atomic_write_text
+
+        _atomic_write_text(path, self.to_html())
+
     def save_json(self, path: str | os.PathLike[str]) -> None:
         """Save canonical JSON as UTF-8, creating parent directories."""
 
+        from retrieval_lab.artifacts.results import _atomic_write_text
+
         try:
-            output_path = Path(path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(self.to_json(), encoding="utf-8", newline="")
-        except (OSError, TypeError, ValueError) as exc:
+            _atomic_write_text(path, self.to_json())
+        except EvaluationError as exc:
             raise EvaluationError(
                 f"Evaluation result could not be saved to {path!s}"
             ) from exc
