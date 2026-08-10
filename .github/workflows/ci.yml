@@ -45,3 +45,100 @@ jobs:
       - run: uv sync --extra dev
       - run: uv run pytest
 
+  quality-gate:
+    name: Saved retrieval quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra dev
+      - name: Improved fixture passes
+        shell: bash
+        run: |
+          set +e
+          uv run retrieval-lab gate \
+            --config examples/ci/retrieval-lab.yaml \
+            --baseline examples/ci/baseline.json \
+            examples/ci/candidate-improved.json \
+            --json
+          status=$?
+          set -e
+          test "$status" -eq 0
+      - name: Regressed fixture returns the expected gate failure
+        shell: bash
+        run: |
+          set +e
+          uv run retrieval-lab gate \
+            --config examples/ci/retrieval-lab.yaml \
+            --baseline examples/ci/baseline.json \
+            examples/ci/candidate-regressed.json \
+            --json
+          status=$?
+          set -e
+          test "$status" -eq 1
+
+  wheel-smoke:
+    name: Core wheel CLI smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv build --wheel
+      - name: Install and exercise the core wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv venv /tmp/retrieval-lab-wheel-smoke
+          uv pip install --python /tmp/retrieval-lab-wheel-smoke/bin/python "$wheel"
+          project="$(mktemp -d)/project"
+          /tmp/retrieval-lab-wheel-smoke/bin/retrieval-lab init "$project"
+          /tmp/retrieval-lab-wheel-smoke/bin/retrieval-lab validate \
+            --config "$project/retrieval-lab.yaml"
+          /tmp/retrieval-lab-wheel-smoke/bin/retrieval-lab run \
+            --config "$project/retrieval-lab.yaml" --format json
+          /tmp/retrieval-lab-wheel-smoke/bin/retrieval-lab inspect \
+            "$project/reports/result.json" --json
+
+  install-matrix:
+    name: Install ${{ matrix.extra }} package
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        extra: [core, dense]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv build --wheel
+      - name: Install package variant and import without loading a model
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          if [[ "${{ matrix.extra }}" == "dense" ]]; then
+            uv pip install --system "${wheel}[dense]"
+          else
+            uv pip install --system "$wheel"
+          fi
+          if [[ "${{ matrix.extra }}" == "dense" ]]; then
+            python -c 'import sentence_transformers; from retrieval_lab import DenseRetriever; print(sentence_transformers.__version__, DenseRetriever.__name__)'
+          else
+            python -c 'from retrieval_lab import DenseRetriever, EvaluationResult; print(DenseRetriever.__name__, EvaluationResult.__name__)'
+          fi
