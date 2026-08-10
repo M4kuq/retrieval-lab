@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,10 @@ import pytest
 from retrieval_lab.application import (
     ExperimentOutput,
     InitializedProject,
+    compare_result_files,
+    evaluate_configured_quality_gates,
     initialize_project,
+    inspect_result,
     run_configured_experiment,
     validate_config_inputs,
 )
@@ -201,3 +205,58 @@ def test_force_does_not_write_over_a_known_directory(tmp_path: Path) -> None:
     (project / "retrieval-lab.yaml").mkdir()
     with pytest.raises(ConfigurationError):
         initialize_project(project, force=True)
+
+
+def test_inspect_compare_and_gate_application_services(tmp_path: Path) -> None:
+    project = initialize_project(tmp_path / "project")
+    output = run_configured_experiment(project.target / "retrieval-lab.yaml")
+    result_path = output.paths[0]
+
+    inspection = inspect_result(result_path, query_id="q-example")
+    assert inspection.result.run_id == output.result.run_id
+    assert [row.retriever for row in inspection.evidence] == ["bm25", "keyword"]
+    assert json.loads(inspection.to_json())["query"]["query_id"] == "q-example"
+
+    comparison = compare_result_files(result_path, result_path)
+    assert comparison.comparison.baseline_run_id == output.result.run_id
+    assert comparison.rows
+    assert any(row.direction == "lower_is_better" for row in comparison.rows)
+    assert json.loads(comparison.to_json())["common_retrievers"] == [
+        "bm25",
+        "keyword",
+    ]
+
+    passing = evaluate_configured_quality_gates(
+        project.target / "retrieval-lab.yaml", result_path
+    )
+    assert passing.report.passed
+
+    config_path = project.target / "retrieval-lab.yaml"
+    failing_gate = (
+        "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n    min_value: 2.0"
+    )
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "quality_gates: []",
+            failing_gate,
+        ),
+        encoding="utf-8",
+    )
+    failing = evaluate_configured_quality_gates(config_path, result_path)
+    assert not failing.report.passed
+    assert json.loads(failing.to_json())["passed"] is False
+
+
+def test_inspection_rejects_unknown_query_and_allows_symlinked_ancestor(
+    tmp_path: Path,
+) -> None:
+    project = initialize_project(tmp_path / "project")
+    output = run_configured_experiment(project.target / "retrieval-lab.yaml")
+    result_path = output.paths[0]
+    linked_parent = tmp_path / "linked-reports"
+    linked_parent.symlink_to(result_path.parent, target_is_directory=True)
+
+    inspected = inspect_result(linked_parent / result_path.name)
+    assert inspected.result.run_id == output.result.run_id
+    with pytest.raises(ConfigurationError):
+        inspect_result(result_path, query_id="missing-query")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,160 @@ def test_cli_rejects_unknown_command_and_format() -> None:
     assert bad_format.value.code == 2
 
 
+def test_inspect_compare_and_gate_exit_codes_and_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = tmp_path / "project"
+    assert main(["init", str(project)]) == 0
+    capsys.readouterr()
+    config = project / "retrieval-lab.yaml"
+    assert main(["run", "-c", str(config), "-f", "json"]) == 0
+    capsys.readouterr()
+    result = project / "reports/result.json"
+
+    assert main(["inspect", str(result), "--query-id", "q-example", "--json"]) == 0
+    inspect_payload = json.loads(capsys.readouterr().out)
+    assert inspect_payload["command"] == "inspect"
+    assert inspect_payload["query"]["query_id"] == "q-example"
+
+    assert main(["inspect", str(result), "--query-id", "q-example"]) == 0
+    inspect_text = capsys.readouterr().out
+    assert "query_evidence: q-example" in inspect_text
+    assert "retrieved_ids:" in inspect_text
+
+    assert main(["compare", str(result), str(result), "--json"]) == 0
+    compare_payload = json.loads(capsys.readouterr().out)
+    assert compare_payload["command"] == "compare"
+    assert compare_payload["metrics"]
+
+    assert main(["compare", str(result), str(result)]) == 0
+    compare_text = capsys.readouterr().out
+    assert "baseline_run_id:" in compare_text
+    assert "direction=lower_is_better" in compare_text
+
+    assert main(["gate", "-c", str(config), str(result), "--json"]) == 0
+    gate_payload = json.loads(capsys.readouterr().out)
+    assert gate_payload["command"] == "gate"
+    assert gate_payload["passed"] is True
+
+    assert main(["inspect", str(result), "--query-id", "missing"]) == 2
+    error = capsys.readouterr()
+    assert error.out == ""
+    assert "Traceback" not in error.err
+
+
+def test_gate_failure_is_exit_one_and_debug_is_opt_in(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    assert main(["init", str(project)]) == 0
+    capsys.readouterr()
+    config = project / "retrieval-lab.yaml"
+    failing_gate = (
+        "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n    min_value: 2.0"
+    )
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "quality_gates: []",
+            failing_gate,
+        ),
+        encoding="utf-8",
+    )
+    assert main(["run", "-c", str(config), "-f", "json"]) == 0
+    capsys.readouterr()
+    result = project / "reports/result.json"
+
+    drop_config = config.read_text(encoding="utf-8").replace(
+        "min_value: 2.0", "max_absolute_drop: 0.1"
+    )
+    config.write_text(drop_config, encoding="utf-8")
+    assert main(["gate", "-c", str(config), str(result)]) == 2
+    capsys.readouterr()
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "max_absolute_drop: 0.1", "min_value: 2.0"
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["gate", "-c", str(config), str(result)]) == 1
+    failure = capsys.readouterr()
+    assert "FAIL" in failure.out
+    assert failure.err == ""
+
+    def crash(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr("retrieval_lab.cli.app.inspect_result", crash)
+    assert main(["inspect", str(result)]) == 3
+    normal = capsys.readouterr()
+    assert "Traceback" not in normal.err
+    assert main(["inspect", str(result), "--debug"]) == 3
+    debug = capsys.readouterr()
+    assert "Traceback" in debug.err
+
+
+def test_compare_incomparable_and_malformed_inputs_return_two(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = tmp_path / "project"
+    assert main(["init", str(project)]) == 0
+    capsys.readouterr()
+    result = project / "missing.json"
+    assert main(["compare", str(result), str(result)]) == 2
+    error = capsys.readouterr()
+    assert "Traceback" not in error.err
+
+    malformed = project / "malformed.json"
+    malformed.write_text("{not-json", encoding="utf-8")
+    assert main(["inspect", str(malformed)]) == 2
+    malformed_error = capsys.readouterr()
+    assert malformed_error.out == ""
+    assert "Traceback" not in malformed_error.err
+
+    unknown_schema = project / "unknown-schema.json"
+    unknown_schema.write_text('{"schema_version": 99}\n', encoding="utf-8")
+    assert main(["inspect", str(unknown_schema)]) == 2
+    schema_error = capsys.readouterr()
+    assert schema_error.out == ""
+    assert "Traceback" not in schema_error.err
+
+    second = tmp_path / "second"
+    assert main(["init", str(second)]) == 0
+    capsys.readouterr()
+    second_config = second / "retrieval-lab.yaml"
+    second_config.write_text(
+        second_config.read_text(encoding="utf-8").replace(
+            "top_k: [1, 3]", "top_k: [1]"
+        ),
+        encoding="utf-8",
+    )
+    assert main(["run", "-c", str(second_config), "-f", "json"]) == 0
+    capsys.readouterr()
+
+    first = tmp_path / "first"
+    assert main(["init", str(first)]) == 0
+    capsys.readouterr()
+    assert main(["run", "-c", str(first / "retrieval-lab.yaml"), "-f", "json"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "compare",
+                str(first / "reports/result.json"),
+                str(second / "reports/result.json"),
+            ]
+        )
+        == 2
+    )
+    incomparable = capsys.readouterr()
+    assert "Traceback" not in incomparable.err
+
+
 def test_cli_default_run_writes_loadable_canonical_reports(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -131,3 +286,8 @@ def test_cli_unexpected_runtime_error_is_exit_three_without_traceback(
     assert captured.err == "retrieval-lab: unexpected runtime error\n"
     assert "secret" not in captured.err
     assert "Traceback" not in captured.err
+
+    status = main(["run", "-c", str(tmp_path / "config.yaml"), "--debug"])
+    debug = capsys.readouterr()
+    assert status == 3
+    assert "Traceback" in debug.err

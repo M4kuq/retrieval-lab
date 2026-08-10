@@ -43,6 +43,9 @@ The following names are importable from `retrieval_lab`:
 - `evaluate_quality_gates`
 - `InitializedProject`, `ValidationResult`, `ExperimentOutput`
 - `initialize_project`, `validate_config_inputs`, `run_configured_experiment`
+- `InspectionOutput`, `QueryEvidence`, `ComparisonOutput`, `ComparisonRow`,
+  `GateOutput`
+- `inspect_result`, `compare_result_files`, `evaluate_configured_quality_gates`
 - `load_documents`
 - `validate_dataset`
 - `evaluate_results`
@@ -232,14 +235,17 @@ existing empty `quality_gates` result shape.
 
 ## Application services and CLI
 
-The package provides three application services. `initialize_project(target)`
+The package provides typed application services. `initialize_project(target)`
 creates a fixed offline sample without overwriting owned files unless
 `force=True`. `validate_config_inputs(config_path)` validates configuration,
 corpus, dataset, and relevance IDs without executing retrieval.
 `run_configured_experiment(config_path, ...)` runs through
 `EvaluationRunner.from_config()` and writes deterministic `result.json`, CSV,
 and standalone HTML outputs. The services never print and return typed result
-records.
+records. `inspect_result(path, query_id=...)` loads a strict result and
+prepares metadata/evidence, `compare_result_files(baseline, candidate)`
+prepares deterministic deltas, and `evaluate_configured_quality_gates(config,
+candidate, baseline_path=...)` evaluates the configured gates.
 
 The `retrieval-lab` console adapter is intentionally thin:
 
@@ -247,12 +253,30 @@ The `retrieval-lab` console adapter is intentionally thin:
 retrieval-lab init ./my-evaluation
 retrieval-lab validate -c ./my-evaluation/retrieval-lab.yaml
 retrieval-lab run -c ./my-evaluation/retrieval-lab.yaml
+retrieval-lab inspect ./artifacts/result.json
+retrieval-lab compare ./baseline/result.json ./candidate/result.json
+retrieval-lab gate -c ./my-evaluation/retrieval-lab.yaml ./artifacts/result.json
 ```
 
 `init` rejects existing owned files and symlinked template targets. `run`
 accepts repeatable `--format json|csv|html` and an optional `--output-dir`.
 Success is written to stdout; concise errors are written to stderr without
 tracebacks or absolute paths.
+
+`inspect` accepts `--query-id` to display deterministic per-retriever query
+evidence. `inspect`, `compare`, and `gate` accept `--json` for strict,
+machine-readable output and `--debug` to opt into tracebacks. `compare` prints
+baseline/candidate values and absolute/relative deltas, including latency with
+lower-is-better semantics. `gate` returns exit status `1` only when a quality
+gate fails; malformed input, incomparable runs, and evaluation errors return
+`2`, while unexpected runtime errors return `3`.
+
+The JSON command shapes are stable: `inspect` returns `command`, `run_id`,
+`schema_version`, `retrievers`, `quality_gates`, and a deterministic `summary`
+(plus `query` with `query_id` and per-retriever `evidence` when requested);
+`compare` returns `baseline_run_id`, `candidate_run_id`, `common_retrievers`,
+`diagnostics`, and metric rows; `gate` returns `candidate_run_id`, optional
+`baseline_run_id`, `passed`, and the canonical `quality_gates` rows.
 
 Saved runs can be compared without re-running retrieval:
 
