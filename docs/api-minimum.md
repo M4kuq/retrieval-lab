@@ -120,6 +120,16 @@ assert hybrid.settings["rrf_k"] == 60
 assert hybrid.settings["candidate_k"] == 100
 ```
 
+Custom BM25 tokenizer functions receive a privacy-preserving fingerprint of their
+code, defaults, and immutable closure state. Stateful callable objects, or
+functions whose captured state cannot be fingerprinted safely, must pass a stable
+`tokenizer_identity`; only its SHA-256 digest is recorded.
+
+Custom `EmbeddingBackend` implementations must expose a stable, non-null,
+JSON-compatible `cache_identity` that changes whenever embedding behavior or
+provider configuration changes. Only its SHA-256 digest is stored in cache keys
+and manifests; raw provider settings and credentials are never serialized.
+
 For an existing search API, use the synchronous callable contract:
 
 ```python
@@ -133,8 +143,15 @@ class Retriever(Protocol):
 `CallableRetriever(name, callable)` validates immutable `RetrievedItem` records,
 including finite scores, optional contiguous ranks, duplicate IDs, and the
 requested cutoff. `evaluate_retrievers(dataset=..., retrievers=..., top_k=...)`
-evaluates these adapters without a corpus or index, using each returned
-sequence as its ranking and the shared metrics/latency/result schema.
+evaluates these adapters without a corpus or index. Fully scored results are
+normalized by `(-score, id)`; results without complete scores preserve the
+returned sequence. Both use the shared metrics/latency/result schema.
+Runner-produced query results also store `retrieved_ids_by_cutoff`, so each
+cutoff metric has its exact ranking evidence; legacy artifacts without this
+optional field remain loadable.
+For chunk-level relevance, pass the stable chunk-artifact identity as
+`chunk_hash`. Strict comparison requires matching chunk provenance;
+document-level comparison keeps chunk changes experimental.
 
 For an async provider, implement or wrap the separate protocol:
 
@@ -143,9 +160,7 @@ class AsyncRetriever(Protocol):
     @property
     def name(self) -> str: ...
 
-    async def retrieve(
-        self, query: str, *, top_k: int
-    ) -> Sequence[RetrievedItem]: ...
+    async def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]: ...
 ```
 
 `AsyncCallableRetriever(name, callable)` and
@@ -276,7 +291,8 @@ and standalone HTML outputs. The services never print and return typed result
 records. `inspect_result(path, query_id=...)` loads a strict result and
 prepares metadata/evidence, `compare_result_files(baseline, candidate)`
 prepares deterministic deltas, and `evaluate_configured_quality_gates(config,
-candidate, baseline_path=...)` evaluates the configured gates.
+candidate, baseline_path=...)` evaluates an explicit config. Passing only the
+candidate restores the normalized gates embedded in its run manifest.
 
 The `retrieval-lab` console adapter is intentionally thin:
 
@@ -286,8 +302,14 @@ retrieval-lab validate -c ./my-evaluation/retrieval-lab.yaml
 retrieval-lab run -c ./my-evaluation/retrieval-lab.yaml
 retrieval-lab inspect ./artifacts/result.json
 retrieval-lab compare ./baseline/result.json ./candidate/result.json
-retrieval-lab gate -c ./my-evaluation/retrieval-lab.yaml ./artifacts/result.json
+retrieval-lab gate ./candidate/result.json --baseline ./baseline/result.json
+# Optional override: retrieval-lab gate -c retrieval-lab.yaml candidate/result.json
 ```
+
+Artifact-only gating treats the baseline's embedded policy as authoritative and
+requires the candidate policy hash to match it. Candidate-only artifact gating
+assumes the result is from a trusted producer; use an explicit `--config` when
+the policy must be supplied independently of the artifact.
 
 `init` rejects existing owned files and symlinked template targets. `run`
 accepts repeatable `--format json|csv|html` and an optional `--output-dir`.
@@ -300,8 +322,8 @@ machine-readable output and `--debug` to opt into tracebacks. `compare` prints
 baseline/candidate values and absolute/relative deltas, including latency with
 lower-is-better semantics, and reports non-blocking experimental variable
 differences. `gate` returns exit status `1` only when a quality
-gate fails; malformed input, incomparable runs, and evaluation errors return
-`2`, while unexpected runtime errors return `3`.
+gate fails. Malformed input and incomparable saved artifacts return `2`;
+retrieval execution failures return `3`.
 
 The JSON command shapes are stable: `inspect` returns `command`, `run_id`,
 `schema_version`, `retrievers`, `quality_gates`, and a deterministic `summary`

@@ -238,7 +238,8 @@ def evaluate_quality_gates(
         raise ConfigurationError("drop quality gates require a baseline")
 
     comparison = None
-    if baseline is not None:
+    if has_drop:
+        assert baseline is not None
         comparison = compare_runs(baseline, candidate, tolerance=checked_tolerance)
 
     results = []
@@ -248,6 +249,7 @@ def evaluate_quality_gates(
         delta = (
             None
             if comparison is None
+            or (gate.max_absolute_drop is None and gate.max_relative_drop is None)
             else _comparison_delta(comparison, gate.retriever, metric, cutoff)
         )
         checks: list[QualityGateCheck] = []

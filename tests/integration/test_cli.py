@@ -8,6 +8,11 @@ import pytest
 import retrieval_lab.cli.app as cli_app
 from retrieval_lab import load_result
 from retrieval_lab.cli.app import main
+from retrieval_lab.exceptions import (
+    EvaluationError,
+    OptionalDependencyError,
+    RetrieverContractError,
+)
 
 
 def test_help_is_available(capsys: pytest.CaptureFixture[str]) -> None:
@@ -94,11 +99,13 @@ def test_inspect_compare_and_gate_exit_codes_and_json(
     inspect_payload = json.loads(capsys.readouterr().out)
     assert inspect_payload["command"] == "inspect"
     assert inspect_payload["query"]["query_id"] == "q-example"
+    assert inspect_payload["query"]["evidence"][0]["retrieved_ids_by_cutoff"]
 
     assert main(["inspect", str(result), "--query-id", "q-example"]) == 0
     inspect_text = capsys.readouterr().out
     assert "query_evidence: q-example" in inspect_text
     assert "retrieved_ids:" in inspect_text
+    assert "retrieved_ids@1:" in inspect_text
 
     assert main(["compare", str(result), str(result), "--json"]) == 0
     compare_payload = json.loads(capsys.readouterr().out)
@@ -252,6 +259,38 @@ def test_gate_failure_is_exit_one_and_debug_is_opt_in(
     assert "Traceback" in debug.err
 
 
+def test_gate_accepts_embedded_candidate_configuration(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = tmp_path / "project"
+    assert main(["init", str(project)]) == 0
+    capsys.readouterr()
+    config = project / "retrieval-lab.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "quality_gates: []",
+            "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
+            "    min_value: 0.0",
+        ),
+        encoding="utf-8",
+    )
+    assert main(["run", "-c", str(config), "-f", "json"]) == 0
+    capsys.readouterr()
+    result = project / "reports/result.json"
+
+    assert main(["gate", str(result), "--baseline", str(result)]) == 0
+    assert "PASS" in capsys.readouterr().out
+
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    payload["run"]["manifest"]["config"]["quality_gates"] = []
+    result.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(["gate", str(result)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "retrieval-lab: configuration or input error\n"
+
+
 def test_compare_incomparable_and_malformed_inputs_return_two(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -369,3 +408,28 @@ def test_cli_unexpected_runtime_error_is_exit_three_without_traceback(
     debug = capsys.readouterr()
     assert status == 3
     assert "Traceback" in debug.err
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OptionalDependencyError("missing optional dependency"),
+        EvaluationError("evaluation failed"),
+        RetrieverContractError("retriever failed"),
+    ],
+)
+def test_cli_known_run_failures_are_exit_three(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(cli_app, "run_configured_experiment", fail)
+
+    assert main(["run", "-c", str(tmp_path / "config.yaml")]) == 3
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "retrieval-lab: evaluation error\n"
