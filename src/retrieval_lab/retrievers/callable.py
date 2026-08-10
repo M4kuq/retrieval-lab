@@ -476,9 +476,9 @@ def _build_manifest(
 
 def _runtime_manifest(started_at: str) -> dict[str, JSONValue]:
     try:
-        version = importlib_metadata.version("retrieval-lab")
+        version = importlib_metadata.version("retrieval-lab-sdk")
     except importlib_metadata.PackageNotFoundError:
-        version = "0.1.0.dev0"
+        version = "0.1.0rc1"
     return {
         "finished_at_utc": _utc_timestamp(),
         "os": {

@@ -1,0 +1,22 @@
+site_name: Retrieval Lab
+site_description: Local-first retrieval evaluation and regression testing
+site_url: https://m4kuq.github.io/retrieval-lab/
+repo_url: https://github.com/M4kuq/retrieval-lab
+exclude_docs: |
+  adr/
+  issues-*.md
+  product-plan.md
+  technical-design.md
+  release-checklist.md
+theme:
+  name: mkdocs
+nav:
+  - Home: index.md
+  - Tutorial: tutorial.md
+  - FAQ: faq.md
+  - CI regression gates: ci-regression.md
+  - API minimum: api-minimum.md
+  - Evaluation: evaluation-spec.md
+  - Glossary: glossary.md
+  - Benchmark: benchmark.md
+  - Release notes: release-notes-0.1.0rc1.md

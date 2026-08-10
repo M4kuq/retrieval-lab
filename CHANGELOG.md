@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project follows Semantic
 Versioning once the first public release is published.
 
-## Unreleased
+## [0.1.0rc1] - 2026-08-10
 
 ### Added
 
@@ -42,6 +42,10 @@ Versioning once the first public release is published.
   example, active CI gate assertions, and wheel/optional-install smoke checks.
 - Added an offline Japanese tutorial corpus, executable Python examples, FAQ,
   and a reproducible BM25 notebook with deterministic validation.
+- Added a deterministic cold/warm local benchmark harness; synthetic benchmark
+  measurements are validation fixtures, not claims about production performance.
+- Added release-candidate package metadata, a strict MkDocs site, and offline
+  wheel/sdist validation workflows.
 
 ### Migration notes
 
@@ -49,3 +53,8 @@ Versioning once the first public release is published.
   runner-produced results include per-retriever `latency` and per-query search
   timing/warnings, plus runtime-only manifest metadata. Consumers should ignore
   unknown result fields and continue accepting older results without latency.
+
+## Unreleased
+
+Development changes after this release candidate are intentionally kept
+separate from the release-candidate notes above.
