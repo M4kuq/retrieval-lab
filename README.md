@@ -121,6 +121,26 @@ hybrid = HybridRetriever(
 )
 ```
 
+## Content-addressed cache
+
+Pass `cache_dir` to reuse validated chunk artifacts and Dense embeddings across
+identical runs. Cache files are schema-versioned canonical JSON, and corrupt or
+incompatible entries are rebuilt rather than used.
+
+```python
+runner = EvaluationRunner.from_dataset(
+    documents=documents,
+    dataset=dataset,
+    retrievers=[hybrid],
+    top_k=[1, 3, 5],
+    cache_dir=".retrieval-lab/cache",
+)
+result = runner.run()
+```
+
+Cache hit, miss, and rebuild events are recorded under `manifest["runtime"]`
+without changing the deterministic `run_id`.
+
 ## Scope
 
 v0.1 focuses on retrieval evaluation. CSV/HTML reports, configuration files, CLI

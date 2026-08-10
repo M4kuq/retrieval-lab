@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
+from retrieval_lab.artifacts.cache import (
+    CacheRead,
+    CacheStatus,
+    dense_index_hash,
+    read_chunk_artifact,
+    read_dense_index_artifact,
+    write_chunk_artifact,
+    write_dense_index_artifact,
+)
 from retrieval_lab.chunkers import FixedSizeChunker
 from retrieval_lab.datasets import EvaluationDataset, RelevanceLevel
 from retrieval_lab.domain import (
@@ -34,7 +45,13 @@ from retrieval_lab.exceptions import (
     EvaluationError,
     RetrievalLabError,
 )
-from retrieval_lab.retrievers import BaseRetriever, BM25Retriever, KeywordRetriever
+from retrieval_lab.retrievers import (
+    BaseRetriever,
+    BM25Retriever,
+    DenseRetriever,
+    HybridRetriever,
+    KeywordRetriever,
+)
 
 
 class EvaluationRunner:
@@ -50,6 +67,7 @@ class EvaluationRunner:
         strategies: Sequence[str] | None = None,
         top_k: Sequence[int] = (1, 3, 5, 10),
         chunker: FixedSizeChunker | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
     ) -> None:
         """Validate an in-memory retrieval experiment."""
 
@@ -81,6 +99,17 @@ class EvaluationRunner:
         if not isinstance(self._chunker, FixedSizeChunker):
             raise ConfigurationError("chunker must be a FixedSizeChunker")
         self._retrievers = _resolve_retrievers(retrievers, strategies)
+        if cache_dir is None:
+            self._cache_dir: Path | None = None
+        else:
+            if isinstance(cache_dir, str) and not cache_dir.strip():
+                raise ConfigurationError("cache_dir must not be empty")
+            try:
+                self._cache_dir = Path(cache_dir)
+            except (TypeError, ValueError) as exc:
+                raise ConfigurationError("cache_dir must be a valid path") from exc
+            if not str(self._cache_dir):
+                raise ConfigurationError("cache_dir must not be empty")
 
     @classmethod
     def quick_evaluate(
@@ -110,6 +139,7 @@ class EvaluationRunner:
         strategies: Sequence[str] | None = None,
         top_k: Sequence[int] = (1, 3, 5, 10),
         chunker: FixedSizeChunker | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
     ) -> EvaluationRunner:
         """Create a runner without discarding graded dataset relevance."""
 
@@ -120,12 +150,13 @@ class EvaluationRunner:
             strategies=strategies,
             top_k=top_k,
             chunker=chunker,
+            cache_dir=cache_dir,
         )
 
     def run(self) -> EvaluationResult:
         """Build shared chunks, retrieve once per query, and evaluate all cutoffs."""
 
-        chunks = self._chunker.chunk(self._documents)
+        chunks: Sequence[Chunk] = self._chunker.chunk(self._documents)
         if not chunks:
             raise CorpusValidationError("chunking produced no evaluable chunks")
         if self._dataset is not None and self._relevance_level == "chunk":
@@ -134,6 +165,25 @@ class EvaluationRunner:
         metrics: dict[str, RetrieverMetrics] = {}
         query_results: dict[str, tuple[QueryEvaluation, ...]] = {}
         max_k = max(self._top_k)
+
+        chunk_hash = _chunk_hash(
+            documents=self._documents,
+            chunks=chunks,
+            chunker=self._chunker,
+        )
+        cache_events: list[dict[str, JSONValue]] = []
+        index_hashes: dict[str, JSONValue] = {}
+        if self._cache_dir is not None:
+            chunks, chunk_event = self._prepare_chunk_cache(
+                chunks,
+                chunk_hash=chunk_hash,
+            )
+            cache_events.append(chunk_event)
+            index_hashes, dense_events = self._prepare_dense_cache(
+                chunks,
+                chunk_hash=chunk_hash,
+            )
+            cache_events.extend(dense_events)
 
         for retriever in self._retrievers:
             try:
@@ -161,6 +211,9 @@ class EvaluationRunner:
             chunker=self._chunker,
             relevance_level=self._relevance_level,
             relevance_grades_by_query=self._relevance_grades_by_query,
+            chunk_hash=chunk_hash,
+            index_hashes=index_hashes,
+            cache_events=cache_events,
         )
         return EvaluationResult(
             run_id=run_id,
@@ -168,6 +221,111 @@ class EvaluationRunner:
             query_results=query_results,
             manifest=manifest,
         )
+
+    def _prepare_chunk_cache(
+        self,
+        chunks: Sequence[Chunk],
+        *,
+        chunk_hash: str,
+    ) -> tuple[tuple[Chunk, ...], dict[str, JSONValue]]:
+        """Read a safe chunk artifact, rebuilding it on any invalid outcome."""
+
+        assert self._cache_dir is not None
+        read = read_chunk_artifact(self._cache_dir, chunk_hash)
+        if read.status is CacheStatus.HIT:
+            cached = read.payload
+            if isinstance(cached, tuple) and cached == tuple(chunks):
+                return tuple(cached), {"artifact": "chunks", "status": "hit"}
+            read = CacheRead(CacheStatus.CORRUPT, reason="chunk content mismatch")
+        write_chunk_artifact(self._cache_dir, chunk_hash, chunks)
+        event: dict[str, JSONValue] = {
+            "artifact": "chunks",
+            "status": read.status.value,
+        }
+        if read.reason is not None:
+            event["reason"] = read.reason
+        return tuple(chunks), event
+
+    def _prepare_dense_cache(
+        self,
+        chunks: Sequence[Chunk],
+        *,
+        chunk_hash: str,
+    ) -> tuple[dict[str, JSONValue], list[dict[str, JSONValue]]]:
+        """Restore or build every shared DenseRetriever before evaluation."""
+
+        assert self._cache_dir is not None
+        index_hashes: dict[str, JSONValue] = {}
+        events: list[dict[str, JSONValue]] = []
+        seen: set[int] = set()
+        for retriever in _find_dense_retrievers(self._retrievers):
+            if id(retriever) in seen:
+                continue
+            seen.add(id(retriever))
+            settings = plain_json(retriever.settings)
+            index_hash = dense_index_hash(chunk_hash, settings)
+            index_hashes[retriever.name] = index_hash
+            identity: dict[str, JSONValue] = {
+                "name": retriever.name,
+                "settings": settings,
+            }
+            read = read_dense_index_artifact(
+                self._cache_dir,
+                index_hash=index_hash,
+                chunk_hash=chunk_hash,
+                retriever_identity=identity,
+                chunks=chunks,
+                model_id=str(settings["model_id"]),
+                requested_revision=_optional_string(settings.get("requested_revision")),
+                expected_resolved_revision=_optional_string(
+                    settings.get("resolved_revision")
+                ),
+            )
+            event: dict[str, JSONValue] = {
+                "artifact": "dense_index",
+                "retriever": retriever.name,
+                "status": read.status.value,
+                "index_hash": index_hash,
+            }
+            if read.reason is not None:
+                event["reason"] = read.reason
+            if read.status is CacheStatus.HIT and isinstance(read.payload, dict):
+                try:
+                    retriever._cache_restore(
+                        chunks,
+                        read.payload["vectors"],
+                        resolved_revision=read.payload["resolved_revision"],
+                    )
+                except Exception as exc:
+                    event["status"] = CacheStatus.CORRUPT.value
+                    event["reason"] = str(exc)
+                else:
+                    events.append(event)
+                    continue
+
+            try:
+                retriever.index(chunks)
+                indexed_chunks, vectors, dimension, metadata = retriever._cache_export()
+                write_dense_index_artifact(
+                    self._cache_dir,
+                    index_hash=index_hash,
+                    chunk_hash=chunk_hash,
+                    retriever_identity=identity,
+                    chunks=indexed_chunks,
+                    vectors=vectors,
+                    dimension=dimension,
+                    model_id=metadata.model_id,
+                    requested_revision=metadata.requested_revision,
+                    resolved_revision=metadata.resolved_revision,
+                )
+            except RetrievalLabError:
+                raise
+            except Exception as exc:
+                raise EvaluationError(
+                    f"dense retriever {retriever.name!r} cache rebuild failed"
+                ) from exc
+            events.append(event)
+        return index_hashes, events
 
     def _evaluate_query(
         self,
@@ -284,6 +442,9 @@ def _build_manifest(
     chunker: FixedSizeChunker,
     relevance_level: RelevanceLevel,
     relevance_grades_by_query: Mapping[str, Mapping[str, int]],
+    chunk_hash: str | None = None,
+    index_hashes: Mapping[str, JSONValue] | None = None,
+    cache_events: Sequence[Mapping[str, JSONValue]] = (),
 ) -> tuple[dict[str, JSONValue], str]:
     corpus_payload: list[JSONValue] = []
     for document in documents:
@@ -307,13 +468,16 @@ def _build_manifest(
         chunks_payload.append(chunk_record)
     corpus_hash = content_hash(corpus_payload)
     dataset_hash = content_hash(dataset_payload(queries, relevance_grades_by_query))
-    chunk_hash = content_hash(
+    calculated_chunk_hash = content_hash(
         {
             "chunks": chunks_payload,
             "corpus_hash": corpus_hash,
             "settings": {"overlap": chunker.overlap, "size": chunker.size},
         }
     )
+    if chunk_hash is not None and chunk_hash != calculated_chunk_hash:
+        raise EvaluationError("chunk hash changed while building the manifest")
+    chunk_hash = calculated_chunk_hash
     retriever_names = tuple(retriever.name for retriever in retrievers)
     retriever_settings: dict[str, JSONValue] = {
         retriever.name: plain_json(retriever.settings) for retriever in retrievers
@@ -343,6 +507,18 @@ def _build_manifest(
         "retriever_settings": retriever_settings,
         "top_k": _json_values(top_k),
     }
+    if index_hashes:
+        manifest["index_hashes"] = {
+            key: index_hashes[key] for key in sorted(index_hashes)
+        }
+    if cache_events:
+        # Runtime cache observations are intentionally outside run_payload, so
+        # hit/miss/corruption never changes the reproducible run ID.
+        manifest["runtime"] = {
+            "cache_events": [
+                {key: event[key] for key in sorted(event)} for event in cache_events
+            ]
+        }
     return manifest, run_id
 
 
@@ -350,6 +526,65 @@ def _json_values(values: Sequence[str | int]) -> list[JSONValue]:
     result: list[JSONValue] = []
     result.extend(values)
     return result
+
+
+def _chunk_hash(
+    *,
+    documents: Sequence[Document],
+    chunks: Sequence[Chunk],
+    chunker: FixedSizeChunker,
+) -> str:
+    """Return the same content hash recorded in the deterministic manifest."""
+
+    corpus_payload: list[JSONValue] = [
+        {
+            "id": document.id,
+            "metadata": plain_json(document.metadata),
+            "source": document.source,
+            "text": document.text,
+        }
+        for document in documents
+    ]
+    chunks_payload: list[JSONValue] = [
+        {
+            "document_id": chunk.document_id,
+            "end_offset": chunk.end_offset,
+            "id": chunk.id,
+            "start_offset": chunk.start_offset,
+            "text": chunk.text,
+        }
+        for chunk in chunks
+    ]
+    corpus_hash = content_hash(corpus_payload)
+    return content_hash(
+        {
+            "chunks": chunks_payload,
+            "corpus_hash": corpus_hash,
+            "settings": {"overlap": chunker.overlap, "size": chunker.size},
+        }
+    )
+
+
+def _find_dense_retrievers(
+    retrievers: Sequence[BaseRetriever],
+) -> tuple[DenseRetriever, ...]:
+    """Find built-in Dense instances, including shared Hybrid sources."""
+
+    found: list[DenseRetriever] = []
+    for retriever in retrievers:
+        if isinstance(retriever, DenseRetriever):
+            found.append(retriever)
+        elif isinstance(retriever, HybridRetriever):
+            found.extend(
+                source
+                for source in retriever._sources
+                if isinstance(source, DenseRetriever)
+            )
+    return tuple(found)
+
+
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 __all__ = ["EvaluationRunner"]

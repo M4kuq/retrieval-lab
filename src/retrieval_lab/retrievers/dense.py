@@ -214,6 +214,10 @@ class DenseRetriever(BaseRetriever):
         self._chunks: tuple[Chunk, ...] | None = None
         self._vectors: tuple[tuple[float, ...], ...] = ()
         self._dimension: int | None = None
+        # Cache restoration may know a resolved revision that the backend does
+        # not expose until it is loaded.  Keep that metadata on the retriever,
+        # never by mutating an arbitrary user-supplied backend object.
+        self._metadata_override: EmbeddingModelMetadata | None = None
 
     @property
     def name(self) -> str:
@@ -225,7 +229,7 @@ class DenseRetriever(BaseRetriever):
     def settings(self) -> Mapping[str, JSONValue]:
         """Return the deterministic dense configuration for a run manifest."""
 
-        metadata = self._metadata_for(self._backend)
+        metadata = self._effective_metadata()
         return {
             "batch_size": self._batch_size,
             "document_prompt": self._document_prompt,
@@ -243,6 +247,12 @@ class DenseRetriever(BaseRetriever):
         """Atomically replace the index after validating every document vector."""
 
         indexed = _validate_chunks(chunks)
+        # HybridRetriever can share one DenseRetriever instance with a
+        # top-level strategy.  Re-indexing the exact same chunks is a no-op,
+        # which also prevents a second backend encode call.
+        if self._chunks == indexed:
+            return
+        self._metadata_override = None
         document_texts = tuple(self._document_prompt + chunk.text for chunk in indexed)
         if document_texts:
             vectors = self._encode(document_texts, context="documents")
@@ -256,6 +266,59 @@ class DenseRetriever(BaseRetriever):
         dimension = len(vectors[0]) if vectors else None
         self._chunks = indexed
         self._vectors = vectors
+        self._dimension = dimension
+
+    def _effective_metadata(self) -> EmbeddingModelMetadata:
+        """Return backend metadata plus any safe cache-restored revision."""
+
+        metadata = self._metadata_for(self._backend)
+        override = self._metadata_override
+        if override is not None and (
+            override.model_id == metadata.model_id
+            and override.requested_revision == metadata.requested_revision
+        ):
+            return override
+        return metadata
+
+    def _cache_export(
+        self,
+    ) -> tuple[
+        tuple[Chunk, ...],
+        tuple[tuple[float, ...], ...],
+        int,
+        EmbeddingModelMetadata,
+    ]:
+        """Return validated index data for the internal JSON cache adapter."""
+
+        if self._chunks is None or self._dimension is None:
+            raise RetrieverContractError("dense retriever has no cacheable index")
+        return self._chunks, self._vectors, self._dimension, self._effective_metadata()
+
+    def _cache_restore(
+        self,
+        chunks: Sequence[Chunk],
+        vectors: object,
+        *,
+        resolved_revision: str | None,
+    ) -> None:
+        """Restore a validated finite matrix without invoking the backend."""
+
+        indexed = _validate_chunks(chunks)
+        if not indexed:
+            raise RetrieverContractError("dense cache cannot restore an empty index")
+        validated = _validate_embedding_matrix(
+            vectors,
+            expected_count=len(indexed),
+            context="cached documents",
+        )
+        dimension = len(validated[0])
+        self._metadata_override = EmbeddingModelMetadata(
+            model_id=self._metadata_for(self._backend).model_id,
+            requested_revision=self._metadata_for(self._backend).requested_revision,
+            resolved_revision=resolved_revision,
+        )
+        self._chunks = indexed
+        self._vectors = validated
         self._dimension = dimension
 
     def search(self, query: str, top_k: int) -> list[SearchResult]:

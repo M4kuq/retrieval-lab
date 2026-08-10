@@ -22,6 +22,7 @@ The following names are importable from `retrieval_lab`:
 - `KeywordRetriever`
 - `BM25Retriever`
 - `DenseRetriever`
+- `HybridRetriever`
 - `EmbeddingBackend`
 - `EmbeddingModelMetadata`
 - `OptionalDependencyError`
@@ -103,6 +104,11 @@ strategies fail explicitly.
 Document relevance collapses repeated parent documents before scoring. Chunk
 relevance evaluates chunk identifiers directly and validates that every gold chunk
 exists in the shared chunk artifact.
+
+`EvaluationRunner` and `from_dataset()` accept an optional `cache_dir`. When set,
+the runner persists validated, content-addressed chunk and Dense-index artifacts as
+canonical JSON. Invalid or incompatible cache data is reported in runtime manifest
+events and rebuilt. Cache state does not change the deterministic `run_id`.
 
 `EvaluationRunner(...).run()` uses the same application path as
 `quick_evaluate`; the classmethod is convenience syntax, not separate logic.
