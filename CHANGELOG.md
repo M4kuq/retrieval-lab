@@ -34,6 +34,8 @@ Versioning once the first public release is published.
   diagnostics and aggregate/query-level metric deltas.
 - Typed absolute and baseline-relative quality-gate evaluation with immutable
   result attachment and validated JSON round-tripping.
+- Thin standard-library CLI and typed application services for safe project
+  initialization, input validation, configured runs, and report persistence.
 
 ### Migration notes
 

@@ -1,5 +1,13 @@
 """Public Python API for Retrieval Lab."""
 
+from retrieval_lab.application import (
+    ExperimentOutput,
+    InitializedProject,
+    ValidationResult,
+    initialize_project,
+    run_configured_experiment,
+    validate_config_inputs,
+)
 from retrieval_lab.artifacts.results import load_result
 from retrieval_lab.chunkers import FixedSizeChunker
 from retrieval_lab.comparison import (
@@ -104,10 +112,12 @@ __all__ = [
     "EvaluationResult",
     "EvaluationRunner",
     "ExperimentConfig",
+    "ExperimentOutput",
     "FixedSizeChunker",
     "HybridRetriever",
     "HybridRetrieverConfig",
     "IncomparableRunError",
+    "InitializedProject",
     "KeywordRetriever",
     "KeywordRetrieverConfig",
     "LatencyStats",
@@ -131,14 +141,18 @@ __all__ = [
     "RetrieverMetrics",
     "RunComparison",
     "SearchResult",
+    "ValidationResult",
     "check_comparability",
     "compare_runs",
     "evaluate_async_retrievers",
     "evaluate_quality_gates",
     "evaluate_results",
     "evaluate_retrievers",
+    "initialize_project",
     "load_config",
     "load_documents",
     "load_result",
+    "run_configured_experiment",
+    "validate_config_inputs",
     "validate_dataset",
 ]
