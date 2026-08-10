@@ -9,21 +9,29 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from retrieval_lab.artifacts.results import load_result
-from retrieval_lab.comparison import MetricDelta, RunComparison, compare_runs
-from retrieval_lab.config import RetrievalConfig, load_config
+from retrieval_lab.comparison import (
+    MetricDelta,
+    RunComparison,
+    check_comparability,
+    compare_runs,
+)
+from retrieval_lab.config import QualityGateConfig, RetrievalConfig, load_config
 from retrieval_lab.domain import (
     EvaluationResult,
     JSONValue,
     QualityGateReport,
 )
+from retrieval_lab.evaluation.engine import content_hash
 from retrieval_lab.exceptions import (
     ConfigurationError,
     EvaluationError,
+    IncomparableRunError,
 )
 from retrieval_lab.quality import evaluate_quality_gates
 from retrieval_lab.runner import EvaluationRunner
@@ -108,11 +116,12 @@ class QueryEvidence:
     metrics: tuple[tuple[str, float], ...]
     search_latency_ms: float | None
     warnings: tuple[str, ...]
+    retrieved_ids_by_cutoff: tuple[tuple[int, tuple[str, ...]], ...] = ()
 
     def to_dict(self) -> dict[str, JSONValue]:
         """Return the machine-readable query evidence shape."""
 
-        return {
+        payload: dict[str, JSONValue] = {
             "metrics": {name: value for name, value in self.metrics},
             "query_id": self.query_id,
             "retrieved_ids": list(self.retrieved_ids),
@@ -120,6 +129,11 @@ class QueryEvidence:
             "search_latency_ms": self.search_latency_ms,
             "warnings": list(self.warnings),
         }
+        if self.retrieved_ids_by_cutoff:
+            payload["retrieved_ids_by_cutoff"] = {
+                str(cutoff): list(ids) for cutoff, ids in self.retrieved_ids_by_cutoff
+            }
+        return payload
 
 
 @dataclass(frozen=True)
@@ -440,6 +454,11 @@ def inspect_result(
                     metrics=metrics,
                     search_latency_ms=query.search_latency_ms,
                     warnings=query.warnings,
+                    retrieved_ids_by_cutoff=(
+                        ()
+                        if query.retrieved_ids_by_cutoff is None
+                        else tuple(query.retrieved_ids_by_cutoff.items())
+                    ),
                 )
             )
         if not rows:
@@ -480,15 +499,24 @@ def compare_result_files(
 
 
 def evaluate_configured_quality_gates(
-    config_path: str | os.PathLike[str],
-    candidate_path: str | os.PathLike[str],
+    config_path: str | os.PathLike[str] | None = None,
+    candidate_path: str | os.PathLike[str] | None = None,
     *,
     baseline_path: str | os.PathLike[str] | None = None,
     max_bytes: int = 64 * 1024 * 1024,
 ) -> GateOutput:
-    """Load config/results and evaluate its typed quality gates."""
+    """Evaluate configured gates from a file or a candidate result manifest.
 
-    config = load_config(_checked_input_file(config_path, "config path"))
+    Passing only one path uses it as the candidate result and restores the
+    normalized gates embedded by a configured run. The two-path form retains
+    the explicit configuration-file contract.
+    """
+
+    if candidate_path is None:
+        candidate_path = config_path
+        config_path = None
+    if candidate_path is None:
+        raise ConfigurationError("candidate result path must be provided")
     candidate = load_result(
         _checked_input_file(candidate_path, "candidate result path"),
         max_bytes=max_bytes,
@@ -501,12 +529,205 @@ def evaluate_configured_quality_gates(
             max_bytes=max_bytes,
         )
     )
+    if config_path is None:
+        _validate_embedded_candidate(candidate)
+        candidate_gates = _embedded_quality_gates(candidate)
+        if baseline is None:
+            gates = candidate_gates
+        else:
+            _validate_embedded_candidate(baseline)
+            baseline_gates = _embedded_quality_gates(baseline)
+            if (
+                candidate.manifest["quality_gate_policy_hash"]
+                != baseline.manifest["quality_gate_policy_hash"]
+            ):
+                raise ConfigurationError(
+                    "candidate and baseline embedded quality gate policies differ; "
+                    "provide an explicit config"
+                )
+            gates = baseline_gates
+    else:
+        gates = load_config(
+            _checked_input_file(config_path, "config path")
+        ).quality_gates
     report = evaluate_quality_gates(
         candidate,
-        config.quality_gates,
+        gates,
         baseline=baseline,
     )
     return GateOutput(report=report)
+
+
+def _embedded_quality_gates(
+    candidate: EvaluationResult,
+) -> tuple[QualityGateConfig, ...]:
+    raw_config = candidate.manifest.get("config")
+    if not isinstance(raw_config, Mapping):
+        raise ConfigurationError(
+            "candidate result does not contain embedded quality gates"
+        )
+    raw_gates = raw_config.get("quality_gates")
+    if (
+        isinstance(raw_gates, (str, bytes))
+        or not isinstance(raw_gates, Sequence)
+        or not raw_gates
+    ):
+        raise ConfigurationError(
+            "candidate result does not contain embedded quality gates"
+        )
+    fields = {
+        "max_absolute_drop",
+        "max_relative_drop",
+        "max_value",
+        "metric",
+        "min_value",
+        "retriever",
+    }
+    gates: list[QualityGateConfig] = []
+    for index, raw_gate in enumerate(raw_gates):
+        if not isinstance(raw_gate, Mapping) or set(raw_gate) != fields:
+            raise ConfigurationError(
+                f"candidate embedded quality_gates[{index}] is invalid"
+            )
+        try:
+            gates.append(
+                QualityGateConfig(
+                    retriever=_embedded_string(
+                        raw_gate["retriever"],
+                        f"quality_gates[{index}].retriever",
+                    ),
+                    metric=_embedded_string(
+                        raw_gate["metric"], f"quality_gates[{index}].metric"
+                    ),
+                    min_value=_embedded_number(
+                        raw_gate["min_value"], f"quality_gates[{index}].min_value"
+                    ),
+                    max_value=_embedded_number(
+                        raw_gate["max_value"], f"quality_gates[{index}].max_value"
+                    ),
+                    max_absolute_drop=_embedded_number(
+                        raw_gate["max_absolute_drop"],
+                        f"quality_gates[{index}].max_absolute_drop",
+                    ),
+                    max_relative_drop=_embedded_number(
+                        raw_gate["max_relative_drop"],
+                        f"quality_gates[{index}].max_relative_drop",
+                    ),
+                )
+            )
+        except ConfigurationError as exc:
+            raise ConfigurationError(
+                f"candidate embedded quality_gates[{index}] is invalid"
+            ) from exc
+    policy_hash = candidate.manifest.get("quality_gate_policy_hash")
+    expected_policy_hash = content_hash(cast(JSONValue, raw_gates))
+    if policy_hash != expected_policy_hash:
+        raise ConfigurationError(
+            "candidate embedded quality gate policy does not match its run identity"
+        )
+    return tuple(gates)
+
+
+def _validate_embedded_candidate(candidate: EvaluationResult) -> None:
+    """Validate producer invariants before trusting an embedded gate policy."""
+
+    report = check_comparability(candidate, candidate)
+    if not report.comparable:
+        raise IncomparableRunError(
+            "candidate result violates producer manifest invariants; inspect .issues",
+            issues=report.issues,
+        )
+    required = {
+        "chunk_hash",
+        "dataset_hash",
+        "index_hashes",
+        "metric_version",
+        "quality_gate_policy_hash",
+        "relevance_level",
+        "retrievers",
+        "retriever_settings",
+        "seed",
+        "top_k",
+    }
+    missing = sorted(required - set(candidate.manifest))
+    if missing:
+        raise ConfigurationError(
+            "candidate result is missing configured run identity fields"
+        )
+    manifest = candidate.manifest
+    for field in (
+        "chunk_hash",
+        "dataset_hash",
+        "quality_gate_policy_hash",
+    ):
+        if not _is_sha256(manifest[field]):
+            raise ConfigurationError(
+                f"candidate result manifest.{field} must be a SHA-256 hash"
+            )
+    seed = manifest["seed"]
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ConfigurationError(
+            "candidate result manifest.seed must be a non-negative integer"
+        )
+    raw_retrievers = manifest["retrievers"]
+    if (
+        isinstance(raw_retrievers, (str, bytes))
+        or not isinstance(raw_retrievers, Sequence)
+        or not raw_retrievers
+        or any(not isinstance(name, str) or not name.strip() for name in raw_retrievers)
+        or len(set(raw_retrievers)) != len(raw_retrievers)
+        or set(raw_retrievers) != set(candidate.metrics)
+    ):
+        raise ConfigurationError(
+            "candidate result manifest.retrievers does not match result retrievers"
+        )
+    retriever_settings = manifest["retriever_settings"]
+    if (
+        not isinstance(retriever_settings, Mapping)
+        or set(retriever_settings) != set(candidate.metrics)
+        or any(not isinstance(value, Mapping) for value in retriever_settings.values())
+    ):
+        raise ConfigurationError(
+            "candidate result manifest.retriever_settings is invalid"
+        )
+    index_hashes = manifest["index_hashes"]
+    if not isinstance(index_hashes, Mapping) or any(
+        not isinstance(key, str) or not key.strip() or not _is_sha256(value)
+        for key, value in index_hashes.items()
+    ):
+        raise ConfigurationError("candidate result manifest.index_hashes is invalid")
+    if not _is_sha256(candidate.run_id):
+        raise ConfigurationError("candidate result run ID must be a SHA-256 hash")
+    expected_run_id = content_hash({key: manifest[key] for key in sorted(required)})
+    if candidate.run_id != expected_run_id:
+        raise ConfigurationError(
+            "candidate result run identity does not match its manifest"
+        )
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _embedded_string(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise ConfigurationError(f"candidate embedded {field} must be a string")
+    return value
+
+
+def _embedded_number(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigurationError(f"candidate embedded {field} must be numeric")
+    try:
+        return float(value)
+    except OverflowError as exc:
+        raise ConfigurationError(f"candidate embedded {field} must be finite") from exc
 
 
 def _path_from_input(value: str | os.PathLike[str] | None, field: str) -> Path:

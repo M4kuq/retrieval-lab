@@ -257,6 +257,40 @@ def test_invalid_reference_and_missing_baseline_are_configuration_errors() -> No
         )
 
 
+def test_absolute_only_gate_does_not_require_a_baseline_delta() -> None:
+    baseline = _result(0.5, run_id="baseline")
+    candidate_base = _result(0.5, run_id="candidate")
+    dense_queries = tuple(
+        QueryEvaluation(
+            query_id=query.query_id,
+            retrieved_ids=query.retrieved_ids,
+            metrics_by_cutoff=query.metrics_by_cutoff,
+        )
+        for query in candidate_base.query_results["bm25"]
+    )
+    candidate = EvaluationResult(
+        run_id=candidate_base.run_id,
+        metrics={
+            **candidate_base.metrics,
+            "dense": RetrieverMetrics({1: {"recall": 0.8}}),
+        },
+        query_results={
+            **candidate_base.query_results,
+            "dense": dense_queries,
+        },
+        manifest=candidate_base.manifest,
+    )
+
+    report = evaluate_quality_gates(
+        candidate,
+        (QualityGateConfig(retriever="dense", metric="recall@1", min_value=0.7),),
+        baseline=baseline,
+    )
+
+    assert report.passed
+    assert report.baseline_run_id == "baseline"
+
+
 def test_quality_engine_rejects_invalid_inputs_and_nonfinite_values() -> None:
     candidate = _result(0.5)
     with pytest.raises(EvaluationError):

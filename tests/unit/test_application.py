@@ -15,7 +15,35 @@ from retrieval_lab.application import (
     run_configured_experiment,
     validate_config_inputs,
 )
-from retrieval_lab.exceptions import ConfigurationError, DatasetValidationError
+from retrieval_lab.evaluation.engine import content_hash
+from retrieval_lab.exceptions import (
+    ConfigurationError,
+    DatasetValidationError,
+    IncomparableRunError,
+)
+
+_CONFIGURED_RUN_IDENTITY_FIELDS = {
+    "chunk_hash",
+    "dataset_hash",
+    "index_hashes",
+    "metric_version",
+    "quality_gate_policy_hash",
+    "relevance_level",
+    "retrievers",
+    "retriever_settings",
+    "seed",
+    "top_k",
+}
+
+
+def _recompute_configured_run_id(payload: dict[str, object]) -> None:
+    run = payload["run"]
+    assert isinstance(run, dict)
+    manifest = run["manifest"]
+    assert isinstance(manifest, dict)
+    run["id"] = content_hash(
+        {key: manifest[key] for key in sorted(_CONFIGURED_RUN_IDENTITY_FIELDS)}  # type: ignore[arg-type]
+    )
 
 
 def test_initialize_project_creates_a_runnable_unicode_template(
@@ -215,7 +243,12 @@ def test_inspect_compare_and_gate_application_services(tmp_path: Path) -> None:
     inspection = inspect_result(result_path, query_id="q-example")
     assert inspection.result.run_id == output.result.run_id
     assert [row.retriever for row in inspection.evidence] == ["bm25", "keyword"]
-    assert json.loads(inspection.to_json())["query"]["query_id"] == "q-example"
+    inspection_payload = json.loads(inspection.to_json())
+    assert inspection_payload["query"]["query_id"] == "q-example"
+    assert inspection_payload["query"]["evidence"][0]["retrieved_ids_by_cutoff"] == {
+        "1": ["example.md"],
+        "3": ["example.md"],
+    }
 
     comparison = compare_result_files(result_path, result_path)
     assert comparison.comparison.baseline_run_id == output.result.run_id
@@ -245,6 +278,159 @@ def test_inspect_compare_and_gate_application_services(tmp_path: Path) -> None:
     failing = evaluate_configured_quality_gates(config_path, result_path)
     assert not failing.report.passed
     assert json.loads(failing.to_json())["passed"] is False
+
+
+def test_gate_application_restores_embedded_candidate_gates(tmp_path: Path) -> None:
+    project = initialize_project(tmp_path / "project")
+    config_path = project.target / "retrieval-lab.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "quality_gates: []",
+            "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
+            "    min_value: 0.0",
+        ),
+        encoding="utf-8",
+    )
+    output = run_configured_experiment(config_path)
+
+    restored = evaluate_configured_quality_gates(output.paths[0])
+    restored_by_keyword = evaluate_configured_quality_gates(
+        candidate_path=output.paths[0]
+    )
+
+    assert restored.report.passed
+    assert restored_by_keyword.report.passed
+    payload = json.loads(output.paths[0].read_text(encoding="utf-8"))
+    payload["run"]["manifest"]["config"]["quality_gates"] = []
+    output.paths[0].write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="embedded quality gates"):
+        evaluate_configured_quality_gates(output.paths[0])
+
+
+def test_embedded_gate_rejects_invalid_manifest_and_policy_tampering(
+    tmp_path: Path,
+) -> None:
+    project = initialize_project(tmp_path / "project")
+    config_path = project.target / "retrieval-lab.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "quality_gates: []",
+            "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
+            "    min_value: 0.0",
+        ),
+        encoding="utf-8",
+    )
+    output = run_configured_experiment(config_path)
+    original = json.loads(output.paths[0].read_text(encoding="utf-8"))
+
+    invalid_manifest = json.loads(json.dumps(original))
+    invalid_manifest["run"]["manifest"]["top_k"] = []
+    output.paths[0].write_text(json.dumps(invalid_manifest), encoding="utf-8")
+    with pytest.raises(IncomparableRunError, match="producer manifest"):
+        evaluate_configured_quality_gates(output.paths[0])
+
+    changed_policy = json.loads(json.dumps(original))
+    changed_policy["run"]["manifest"]["config"]["quality_gates"][0]["min_value"] = 1.0
+    output.paths[0].write_text(json.dumps(changed_policy), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="policy"):
+        evaluate_configured_quality_gates(output.paths[0])
+
+
+def test_embedded_gate_policy_participates_in_configured_run_id(tmp_path: Path) -> None:
+    project = initialize_project(tmp_path / "project")
+    config_path = project.target / "retrieval-lab.yaml"
+    base = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        base.replace(
+            "quality_gates: []",
+            "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
+            "    min_value: 0.0",
+        ),
+        encoding="utf-8",
+    )
+    first = run_configured_experiment(config_path).result
+    config_path.write_text(
+        base.replace(
+            "quality_gates: []",
+            "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
+            "    min_value: 1.0",
+        ),
+        encoding="utf-8",
+    )
+    second = run_configured_experiment(config_path).result
+
+    assert first.run_id != second.run_id
+    assert (
+        first.manifest["quality_gate_policy_hash"]
+        != second.manifest["quality_gate_policy_hash"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("seed", -1),
+        ("chunk_hash", 7),
+        ("retrievers", []),
+        ("retriever_settings", []),
+        ("index_hashes", []),
+    ],
+)
+def test_embedded_gate_rejects_forged_producer_identity_shapes(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    project = initialize_project(tmp_path / "project")
+    config_path = project.target / "retrieval-lab.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "quality_gates: []",
+            "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
+            "    min_value: 0.0",
+        ),
+        encoding="utf-8",
+    )
+    output = run_configured_experiment(config_path)
+    payload = json.loads(output.paths[0].read_text(encoding="utf-8"))
+    payload["run"]["manifest"][field] = value
+    _recompute_configured_run_id(payload)
+    output.paths[0].write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="candidate result manifest"):
+        evaluate_configured_quality_gates(output.paths[0])
+
+
+def test_artifact_only_gate_uses_matching_baseline_policy_as_authority(
+    tmp_path: Path,
+) -> None:
+    project = initialize_project(tmp_path / "project")
+    config_path = project.target / "retrieval-lab.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "quality_gates: []",
+            "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
+            "    min_value: 1.1",
+        ),
+        encoding="utf-8",
+    )
+    output = run_configured_experiment(config_path)
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(output.result.to_json(), encoding="utf-8")
+    candidate_path = tmp_path / "candidate.json"
+    payload = json.loads(output.result.to_json())
+    gates = payload["run"]["manifest"]["config"]["quality_gates"]
+    gates[0]["min_value"] = 0.0
+    payload["run"]["manifest"]["quality_gate_policy_hash"] = content_hash(gates)
+    _recompute_configured_run_id(payload)
+    candidate_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert evaluate_configured_quality_gates(candidate_path).report.passed
+    with pytest.raises(ConfigurationError, match="policies differ"):
+        evaluate_configured_quality_gates(
+            candidate_path,
+            baseline_path=baseline_path,
+        )
 
 
 def test_compare_output_exposes_experimental_variable_differences(

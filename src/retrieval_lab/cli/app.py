@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--debug", action="store_true")
 
     gate = commands.add_parser("gate", help="evaluate configured quality gates")
-    gate.add_argument("-c", "--config", required=True, type=Path)
+    gate.add_argument("-c", "--config", type=Path)
     gate.add_argument("candidate", type=Path)
     gate.add_argument("--baseline", type=Path)
     gate.add_argument("--json", dest="json_output", action="store_true")
@@ -138,7 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     except (OptionalDependencyError, EvaluationError, RetrievalLabError) as exc:
         _write_error(_evaluation_error_message(exc), debug=_is_debug(args))
-        return 2
+        return 3 if args is not None and args.command == "run" else 2
     except (OSError, ValueError, TypeError) as exc:
         _write_error(_input_error_message(exc), debug=_is_debug(args))
         return 2
@@ -189,6 +189,8 @@ def _emit_inspection(output: InspectionOutput, *, json_output: bool) -> None:
         for evidence in output.evidence:
             print(f"  retriever: {evidence.retriever}")
             print(f"    retrieved_ids: {', '.join(evidence.retrieved_ids)}")
+            for cutoff, ids in evidence.retrieved_ids_by_cutoff:
+                print(f"    retrieved_ids@{cutoff}: {', '.join(ids)}")
             for metric, value in evidence.metrics:
                 print(f"    {metric}: {value:.12g}")
             if evidence.search_latency_ms is not None:
