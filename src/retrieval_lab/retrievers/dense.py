@@ -442,15 +442,13 @@ class DenseRetriever(BaseRetriever):
             (self._query_prompt + query,),
             context="query",
         )[0]
-        if self._metadata_override is not None:
-            current_metadata = self._metadata_for(self._backend)
-            if (
-                current_metadata.resolved_revision
-                != self._metadata_override.resolved_revision
-            ):
-                raise RetrieverContractError(
-                    "dense cache resolved revision changed after query initialization"
-                )
+        if (
+            self._indexed_identity is not None
+            and self._index_identity() != self._indexed_identity
+        ):
+            raise RetrieverContractError(
+                "dense backend identity or revision changed after indexing"
+            )
         if self._dimension is None:
             return []
         if len(query_vector) != self._dimension:

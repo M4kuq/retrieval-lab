@@ -405,6 +405,44 @@ def test_cached_revision_is_revalidated_after_query_initialization() -> None:
         retriever.search("query", 1)
 
 
+@pytest.mark.parametrize("drift", ["revision", "cache_identity"])
+def test_query_encoding_rejects_backend_identity_drift(drift: str) -> None:
+    class DriftingBackend:
+        def __init__(self) -> None:
+            self.revision = "r1"
+            self.identity = "identity-1"
+
+        @property
+        def metadata(self) -> EmbeddingModelMetadata:
+            return EmbeddingModelMetadata(
+                model_id="drifting",
+                resolved_revision=self.revision,
+            )
+
+        @property
+        def cache_identity(self) -> str:
+            return self.identity
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            if texts and texts[0].startswith("query: "):
+                if drift == "revision":
+                    self.revision = "r2"
+                else:
+                    self.identity = "identity-2"
+            return [[1.0, 0.0] for _ in texts]
+
+    retriever = DenseRetriever(backend=DriftingBackend())
+    retriever.index([_chunk("document", "document")])
+
+    with pytest.raises(RetrieverContractError, match="identity or revision changed"):
+        retriever.search("query", 1)
+
+
 def test_huge_integer_embedding_is_a_typed_contract_error() -> None:
     class HugeBackend:
         metadata = EmbeddingModelMetadata(model_id="huge")
