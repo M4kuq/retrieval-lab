@@ -9,10 +9,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
+if not __package__:
+    _repository_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(_repository_root / "src"))
+    sys.path.insert(0, str(_repository_root))
+
 from retrieval_lab.exceptions import EvaluationError
 
-if not __package__:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 _harness = importlib.import_module("benchmarks.harness")
 BenchmarkSpec = _harness.BenchmarkSpec
 run_benchmark = _harness.run_benchmark
