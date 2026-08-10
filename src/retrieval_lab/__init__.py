@@ -31,10 +31,14 @@ from retrieval_lab.config import (
 from retrieval_lab.datasets import EvaluationDataset, RelevanceLevel, validate_dataset
 from retrieval_lab.domain import (
     Chunk,
+    ConstraintType,
     Document,
     EvaluationQuery,
     EvaluationResult,
     LatencyStats,
+    QualityGateCheck,
+    QualityGateReport,
+    QualityGateResult,
     QueryEvaluation,
     RetrieverMetrics,
     SearchResult,
@@ -51,6 +55,7 @@ from retrieval_lab.exceptions import (
     RetrieverContractError,
 )
 from retrieval_lab.loaders import load_documents
+from retrieval_lab.quality import evaluate_quality_gates
 from retrieval_lab.retrievers import (
     AsyncCallableRetriever,
     AsyncRetriever,
@@ -82,6 +87,7 @@ __all__ = [
     "ComparabilityReport",
     "ComparisonTolerance",
     "ConfigurationError",
+    "ConstraintType",
     "CorpusConfig",
     "CorpusValidationError",
     "DatasetConfig",
@@ -108,7 +114,10 @@ __all__ = [
     "MetricComparison",
     "MetricDelta",
     "OptionalDependencyError",
+    "QualityGateCheck",
     "QualityGateConfig",
+    "QualityGateReport",
+    "QualityGateResult",
     "QueryDeltaExtreme",
     "QueryEvaluation",
     "RelevanceLevel",
@@ -125,6 +134,7 @@ __all__ = [
     "check_comparability",
     "compare_runs",
     "evaluate_async_retrievers",
+    "evaluate_quality_gates",
     "evaluate_results",
     "evaluate_retrievers",
     "load_config",

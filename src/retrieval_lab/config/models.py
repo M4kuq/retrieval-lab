@@ -21,6 +21,12 @@ DatasetFormat = Literal["native_jsonl"]
 RelevanceLevel = Literal["document", "chunk"]
 RetrieverType = Literal["keyword", "bm25", "dense", "hybrid"]
 SUPPORTED_METRICS = ("hit_rate", "recall", "precision", "mrr", "ndcg", "ap")
+SUPPORTED_LATENCY_METRICS = (
+    "latency_mean_ms",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "latency_max_ms",
+)
 SUPPORTED_REPORT_FORMATS = ("json", "csv", "html")
 
 
@@ -55,6 +61,24 @@ def _path(value: object, field_name: str) -> Path:
     if not isinstance(value, Path):
         raise ConfigurationError(f"{field_name} must be a Path")
     return value
+
+
+def _quality_metric(value: str) -> None:
+    if value in SUPPORTED_LATENCY_METRICS:
+        return
+    if value.count("@") != 1:
+        raise ConfigurationError(
+            "quality_gates.metric must be metric@positive_cutoff or a supported "
+            "latency metric"
+        )
+    name, raw_cutoff = value.split("@")
+    if name not in SUPPORTED_METRICS or not raw_cutoff.isdecimal():
+        raise ConfigurationError("quality_gates.metric is not supported")
+    cutoff = int(raw_cutoff)
+    if cutoff <= 0 or raw_cutoff != str(cutoff):
+        raise ConfigurationError(
+            "quality_gates.metric cutoff must be canonical positive integer"
+        )
 
 
 @dataclass(frozen=True)
@@ -312,13 +336,24 @@ class QualityGateConfig:
     metric: str
     min_value: float | None = None
     max_value: float | None = None
+    max_absolute_drop: float | None = None
+    max_relative_drop: float | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.retriever, "quality_gates.retriever")
         _non_empty(self.metric, "quality_gates.metric")
-        if self.min_value is None and self.max_value is None:
+        _quality_metric(self.metric)
+        if all(
+            value is None
+            for value in (
+                self.min_value,
+                self.max_value,
+                self.max_absolute_drop,
+                self.max_relative_drop,
+            )
+        ):
             raise ConfigurationError(
-                "quality_gates entries require min_value or max_value"
+                "quality_gates entries require at least one constraint"
             )
         if self.min_value is not None:
             object.__setattr__(
@@ -327,6 +362,24 @@ class QualityGateConfig:
         if self.max_value is not None:
             object.__setattr__(
                 self, "max_value", _finite(self.max_value, "quality_gates.max_value")
+            )
+        for field_name in ("max_absolute_drop", "max_relative_drop"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            normalized = _finite(value, f"quality_gates.{field_name}")
+            if normalized < 0.0:
+                raise ConfigurationError(
+                    f"quality_gates.{field_name} must be non-negative"
+                )
+            object.__setattr__(self, field_name, normalized)
+        if (
+            self.min_value is not None
+            and self.max_value is not None
+            and self.min_value > self.max_value
+        ):
+            raise ConfigurationError(
+                "quality_gates.min_value must not exceed max_value"
             )
 
 
@@ -441,6 +494,13 @@ class RetrievalConfig:
                 raise ConfigurationError(
                     f"quality gate references unknown retriever {gate.retriever!r}"
                 )
+            if gate.metric not in SUPPORTED_LATENCY_METRICS:
+                _, raw_cutoff = gate.metric.split("@")
+                cutoff = int(raw_cutoff)
+                if cutoff not in self.evaluation.top_k:
+                    raise ConfigurationError(
+                        "quality gate cutoff must be present in evaluation.top_k"
+                    )
         if self.source_dir is not None:
             _path(self.source_dir, "source_dir")
 
@@ -492,6 +552,8 @@ class RetrievalConfig:
             "quality_gates": [
                 {
                     "max_value": gate.max_value,
+                    "max_absolute_drop": gate.max_absolute_drop,
+                    "max_relative_drop": gate.max_relative_drop,
                     "metric": gate.metric,
                     "min_value": gate.min_value,
                     "retriever": gate.retriever,
@@ -560,6 +622,7 @@ def _retriever_settings(value: RetrieverConfig) -> dict[str, JSONValue]:
 
 
 __all__ = [
+    "SUPPORTED_LATENCY_METRICS",
     "SUPPORTED_METRICS",
     "SUPPORTED_REPORT_FORMATS",
     "BM25RetrieverConfig",

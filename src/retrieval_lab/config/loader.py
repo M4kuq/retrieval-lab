@@ -675,7 +675,17 @@ def _parse_quality_gates(value: object, errors: _Errors) -> list[QualityGateConf
     for index, item in enumerate(value):
         path = f"quality_gates[{index}]"
         data = _mapping(
-            item, path, {"retriever", "metric", "min_value", "max_value"}, errors
+            item,
+            path,
+            {
+                "retriever",
+                "metric",
+                "min_value",
+                "max_value",
+                "max_absolute_drop",
+                "max_relative_drop",
+            },
+            errors,
         )
         retriever = (
             _str(data.get("retriever"), f"{path}.retriever", errors) or "invalid"
@@ -683,6 +693,12 @@ def _parse_quality_gates(value: object, errors: _Errors) -> list[QualityGateConf
         metric = _str(data.get("metric"), f"{path}.metric", errors) or "invalid"
         minimum = _number(data.get("min_value"), f"{path}.min_value", errors)
         maximum = _number(data.get("max_value"), f"{path}.max_value", errors)
+        absolute_drop = _number(
+            data.get("max_absolute_drop"), f"{path}.max_absolute_drop", errors
+        )
+        relative_drop = _number(
+            data.get("max_relative_drop"), f"{path}.max_relative_drop", errors
+        )
         try:
             result.append(
                 QualityGateConfig(
@@ -690,10 +706,12 @@ def _parse_quality_gates(value: object, errors: _Errors) -> list[QualityGateConf
                     metric=metric,
                     min_value=minimum,
                     max_value=maximum,
+                    max_absolute_drop=absolute_drop,
+                    max_relative_drop=relative_drop,
                 )
             )
         except ConfigurationError as exc:
-            errors.add(path, str(exc), "set min_value or max_value")
+            errors.add(path, str(exc), "set at least one valid constraint")
     return result
 
 
