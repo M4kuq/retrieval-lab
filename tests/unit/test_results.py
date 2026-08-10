@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from retrieval_lab.domain import EvaluationResult, QueryEvaluation, RetrieverMetrics
+from retrieval_lab.domain import (
+    EvaluationResult,
+    LatencyStats,
+    QueryEvaluation,
+    RetrieverMetrics,
+)
 from retrieval_lab.exceptions import EvaluationError
 
 
@@ -60,6 +65,37 @@ def test_query_evaluation_translates_latency_float_overflow() -> None:
             retrieved_ids=(),
             metrics_by_cutoff={1: {"recall": 0.0}},
             search_latency_ms=10**10000,
+        )
+
+
+def test_result_rejects_mixed_per_query_latency_with_aggregate() -> None:
+    timed_base = _query_evaluation("q-timed")
+    timed = QueryEvaluation(
+        query_id=timed_base.query_id,
+        retrieved_ids=timed_base.retrieved_ids,
+        metrics_by_cutoff=timed_base.metrics_by_cutoff,
+        search_latency_ms=1.0,
+    )
+    untimed = QueryEvaluation(
+        query_id="q-untimed",
+        retrieved_ids=("doc-2",),
+        metrics_by_cutoff=timed.metrics_by_cutoff,
+    )
+    with pytest.raises(EvaluationError, match="partial per-query latency"):
+        EvaluationResult(
+            run_id="run",
+            metrics={"keyword": RetrieverMetrics({1: {"recall": 0.5}})},
+            query_results={"keyword": (timed, untimed)},
+            latency={
+                "keyword": LatencyStats(
+                    mean_ms=1.0,
+                    p50_ms=1.0,
+                    p95_ms=1.0,
+                    max_ms=1.0,
+                    sample_count=1,
+                    failure_count=1,
+                )
+            },
         )
 
 

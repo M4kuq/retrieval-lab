@@ -247,6 +247,24 @@ def test_inspect_compare_and_gate_application_services(tmp_path: Path) -> None:
     assert json.loads(failing.to_json())["passed"] is False
 
 
+def test_compare_output_exposes_experimental_variable_differences(
+    tmp_path: Path,
+) -> None:
+    first = initialize_project(tmp_path / "first")
+    second = initialize_project(tmp_path / "second")
+    first_output = run_configured_experiment(first.target / "retrieval-lab.yaml")
+    second_output = run_configured_experiment(second.target / "retrieval-lab.yaml")
+
+    comparison = compare_result_files(first_output.paths[0], second_output.paths[0])
+    payload = comparison.to_dict()
+
+    assert payload["variable_differences"]
+    assert any(item["field"] == "runtime" for item in payload["variable_differences"])
+    assert all(
+        set(item) == {"field", "reason"} for item in payload["variable_differences"]
+    )
+
+
 def test_inspection_rejects_unknown_query_and_allows_symlinked_ancestor(
     tmp_path: Path,
 ) -> None:

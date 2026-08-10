@@ -236,6 +236,13 @@ class ComparisonOutput:
         """Return deterministic machine-readable comparison data."""
 
         report = self.comparison.comparability
+        variable_differences: JSONValue = [
+            {
+                "field": item.field,
+                "reason": item.reason,
+            }
+            for item in report.variable_differences
+        ]
         return {
             "baseline_run_id": self.comparison.baseline_run_id,
             "candidate_run_id": self.comparison.candidate_run_id,
@@ -251,6 +258,7 @@ class ComparisonOutput:
                 for item in report.diagnostics
             ],
             "metrics": [row.to_dict() for row in self.rows],
+            "variable_differences": variable_differences,
         }
 
     def to_json(self) -> str:

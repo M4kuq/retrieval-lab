@@ -253,6 +253,7 @@ class EvaluationResult:
             latency if latency is not None else latency_stats,
             retriever_names=normalized_metrics.keys(),
         )
+        _validate_latency_evidence(normalized_query_results, normalized_latency)
         normalized_quality_gates = _normalize_quality_gates(
             quality_gates,
             candidate_run_id=normalized_run_id,
@@ -544,6 +545,30 @@ def _normalize_quality_gates(
                     "EvaluationResult quality gate candidate value differs"
                 )
     return ordered
+
+
+def _validate_latency_evidence(
+    query_results: Mapping[str, tuple[QueryEvaluation, ...]],
+    latency: Mapping[str, LatencyStats],
+) -> None:
+    """Reject mixed timed and untimed query records alongside aggregates.
+
+    A ``LatencyStats`` aggregate can be retained for legacy aggregate-only
+    results (where every query is untimed), but a result must not mix timing
+    evidence and missing timings.  A failed call is represented by
+    ``failure_count`` in the aggregate; it does not make an ambiguous mixed
+    per-query representation valid.
+    """
+
+    for name, stats in latency.items():
+        queries = query_results[name]
+        timed = sum(query.search_latency_ms is not None for query in queries)
+        if 0 < timed < len(queries):
+            raise EvaluationError(
+                f"EvaluationResult.latency[{name!r}] has partial per-query latency "
+                f"evidence (sample_count={stats.sample_count}, "
+                f"failure_count={stats.failure_count})"
+            )
 
 
 def _quality_gate_metric_value(

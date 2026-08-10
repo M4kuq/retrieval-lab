@@ -124,6 +124,12 @@ def test_ci_workflows_are_safe_and_pin_read_only_commands() -> None:
     assert any("uv sync" in value for value in example_runs)
     assert any("retrieval-lab gate" in value for value in example_runs)
     assert any("--baseline" in value for value in example_runs)
+    example_gate = next(
+        value for value in example_runs if "retrieval-lab gate" in value
+    )
+    assert "candidate-improved.json" in example_gate
+    assert "candidate.json" not in example_gate
+    assert (CI_EXAMPLES / "candidate-improved.json").is_file()
 
     active = workflows[workflow_paths[0]]
     jobs = active["jobs"]
