@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+from typing import cast
 
+from retrieval_lab.evaluation.latency import LatencyStats
 from retrieval_lab.exceptions import EvaluationError
 
 from ._validation import (
@@ -72,6 +75,8 @@ class QueryEvaluation:
     query_id: str
     retrieved_ids: tuple[str, ...]
     metrics_by_cutoff: Mapping[int, Mapping[str, float]]
+    search_latency_ms: float | None = None
+    warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         query_id = require_non_empty_string(
@@ -107,6 +112,33 @@ class QueryEvaluation:
                 owner=f"QueryEvaluation[{query_id!r}]",
             ),
         )
+        if self.search_latency_ms is not None:
+            latency = self.search_latency_ms
+            if (
+                isinstance(latency, bool)
+                or not isinstance(latency, (int, float))
+                or not math.isfinite(float(latency))
+                or float(latency) < 0.0
+            ):
+                raise EvaluationError(
+                    f"QueryEvaluation[{query_id!r}].search_latency_ms must be a "
+                    "finite non-negative number"
+                )
+            object.__setattr__(self, "search_latency_ms", float(latency))
+        if isinstance(self.warnings, (str, bytes)) or not isinstance(
+            self.warnings, Sequence
+        ):
+            raise EvaluationError(
+                f"QueryEvaluation[{query_id!r}].warnings must be a sequence"
+            )
+        warnings = tuple(self.warnings)
+        if any(
+            not isinstance(warning, str) or not warning.strip() for warning in warnings
+        ):
+            raise EvaluationError(
+                f"QueryEvaluation[{query_id!r}].warnings must contain non-empty strings"
+            )
+        object.__setattr__(self, "warnings", warnings)
 
     def to_dict(self) -> dict[str, JSONValue]:
         """Return this query result in the canonical report shape."""
@@ -115,11 +147,20 @@ class QueryEvaluation:
             key: value
             for key, value in _flatten_metrics(self.metrics_by_cutoff).items()
         }
-        return {
+        payload: dict[str, JSONValue] = {
             "metrics": metric_values,
             "query_id": self.query_id,
             "retrieved_ids": list(self.retrieved_ids),
         }
+        # Omit new optional fields for legacy manually-constructed query
+        # results. Runner-produced results always carry the measured latency
+        # and warning list.
+        if self.search_latency_ms is not None:
+            payload["search_latency_ms"] = self.search_latency_ms
+            payload["warnings"] = list(self.warnings)
+        elif self.warnings:
+            payload["warnings"] = list(self.warnings)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -163,6 +204,7 @@ class EvaluationResult:
     query_results: Mapping[str, tuple[QueryEvaluation, ...]]
     manifest: Mapping[str, JSONValue]
     schema_version: int
+    latency: Mapping[str, LatencyStats]
 
     def __init__(
         self,
@@ -171,6 +213,8 @@ class EvaluationResult:
         query_results: Mapping[str, Sequence[QueryEvaluation]],
         manifest: Mapping[str, JSONValue] | None = None,
         schema_version: int = 1,
+        latency: Mapping[str, LatencyStats] | None = None,
+        latency_stats: Mapping[str, LatencyStats] | None = None,
     ) -> None:
         """Create a result after validating retriever and schema consistency."""
 
@@ -193,12 +237,25 @@ class EvaluationResult:
             field_name="EvaluationResult.manifest",
             error_type=EvaluationError,
         )
+        if latency is not None and latency_stats is not None:
+            raise EvaluationError("provide only one of latency or latency_stats")
+        normalized_latency = _normalize_latency(
+            latency if latency is not None else latency_stats,
+            retriever_names=normalized_metrics.keys(),
+        )
 
         object.__setattr__(self, "run_id", normalized_run_id)
         object.__setattr__(self, "metrics", normalized_metrics)
         object.__setattr__(self, "query_results", normalized_query_results)
         object.__setattr__(self, "manifest", normalized_manifest)
         object.__setattr__(self, "schema_version", schema_version)
+        object.__setattr__(self, "latency", normalized_latency)
+
+    @property
+    def latency_stats(self) -> Mapping[str, LatencyStats]:
+        """Return per-retriever latency statistics (compatibility alias)."""
+
+        return self.latency
 
     def to_dict(self) -> dict[str, JSONValue]:
         """Return a fresh dictionary using the canonical result schema."""
@@ -210,6 +267,15 @@ class EvaluationResult:
             }
             retrievers[name] = {
                 "metrics": metric_values,
+                **(
+                    {
+                        "latency": cast(
+                            dict[str, JSONValue], self.latency[name].to_dict()
+                        )
+                    }
+                    if self.latency
+                    else {}
+                ),
                 "per_query": [
                     query_result.to_dict() for query_result in self.query_results[name]
                 ],
@@ -269,6 +335,34 @@ def _normalize_retriever_metrics(
                 f"EvaluationResult.metrics[{name!r}] must be RetrieverMetrics"
             )
         normalized[name] = value
+    return MappingProxyType(dict(sorted(normalized.items())))
+
+
+def _normalize_latency(
+    values: Mapping[str, LatencyStats] | None,
+    *,
+    retriever_names: Collection[str],
+) -> Mapping[str, LatencyStats]:
+    if values is None:
+        return MappingProxyType({})
+    if not isinstance(values, Mapping) or not values:
+        raise EvaluationError("EvaluationResult.latency must not be empty")
+    normalized: dict[str, LatencyStats] = {}
+    for raw_name, value in values.items():
+        name = require_non_empty_string(
+            raw_name,
+            field_name="EvaluationResult.latency retriever name",
+            error_type=EvaluationError,
+        )
+        if not isinstance(value, LatencyStats):
+            raise EvaluationError(
+                f"EvaluationResult.latency[{name!r}] must be LatencyStats"
+            )
+        normalized[name] = value
+    if set(normalized) != set(retriever_names):
+        raise EvaluationError(
+            "EvaluationResult latency and metrics must contain the same retriever names"
+        )
     return MappingProxyType(dict(sorted(normalized.items())))
 
 

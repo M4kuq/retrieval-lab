@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import retrieval_lab.runner as runner_module
 from retrieval_lab import (
     BaseRetriever,
     BM25Retriever,
@@ -16,6 +17,7 @@ from retrieval_lab import (
     DenseRetriever,
     Document,
     EmbeddingModelMetadata,
+    EvaluationError,
     EvaluationQuery,
     EvaluationRunner,
     HybridRetriever,
@@ -43,6 +45,7 @@ def test_quick_evaluate_runs_readme_vertical_slice(tmp_path: Path) -> None:
 
     assert result.metrics["keyword"].recall_at(1) == 1.0
     assert result.query_results["keyword"][0].retrieved_ids == ("doc-1",)
+    assert result.query_results["keyword"][0].warnings
     assert len(result.run_id) == 64
 
     output = tmp_path / "nested" / "result.json"
@@ -104,6 +107,15 @@ class _CountingRetriever(BaseRetriever):
         ]
 
 
+class _FailingRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "failing"
+
+    def search(self, query: str, top_k: int) -> list[SearchResult]:
+        raise RuntimeError("provider secret must remain chained, not serialized")
+
+
 def test_runner_searches_once_at_max_k_and_accepts_custom_retriever() -> None:
     retriever = _CountingRetriever()
     runner = EvaluationRunner(
@@ -123,6 +135,78 @@ def test_runner_searches_once_at_max_k_and_accepts_custom_retriever() -> None:
 
     assert retriever.search_cutoffs == [3]
     assert result.metrics["counting"].recall_at(1) == 1.0
+
+
+def test_runner_uses_injected_monotonic_clock_for_build_and_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0, 2_000_000, 10_000_000, 13_000_000])
+    monkeypatch.setattr(runner_module, "perf_counter_ns", lambda: next(clock))
+
+    result = EvaluationRunner(
+        documents=[Document(id="doc", text="relevant")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="relevant",
+                relevant_document_ids={"doc"},
+            )
+        ],
+        retrievers=[_CountingRetriever()],
+        top_k=[1],
+    ).run()
+
+    runtime = result.manifest["runtime"]
+    assert runtime["build_ms"] == {"counting": 2.0}  # type: ignore[index]
+    assert result.latency["counting"].mean_ms == 3.0
+    assert result.latency["counting"].p50_ms == 3.0
+    assert result.query_results["counting"][0].search_latency_ms == 3.0
+
+
+def test_timing_changes_do_not_change_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run_with_clock(values: list[int]) -> object:
+        clock = iter(values)
+        monkeypatch.setattr(runner_module, "perf_counter_ns", lambda: next(clock))
+        return EvaluationRunner(
+            documents=[Document(id="doc", text="relevant")],
+            queries=[
+                EvaluationQuery(
+                    id="query",
+                    query="relevant",
+                    relevant_document_ids={"doc"},
+                )
+            ],
+            retrievers=[_CountingRetriever()],
+            top_k=[1],
+        ).run()
+
+    fast = run_with_clock([0, 1_000_000, 2_000_000, 3_000_000])
+    slow = run_with_clock([0, 8_000_000, 9_000_000, 25_000_000])
+
+    assert fast.run_id == slow.run_id  # type: ignore[union-attr]
+    assert fast.to_json() != slow.to_json()  # type: ignore[union-attr]
+
+
+def test_query_failure_fails_run_and_preserves_exception_chain() -> None:
+    runner = EvaluationRunner(
+        documents=[Document(id="doc", text="relevant")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="relevant",
+                relevant_document_ids={"doc"},
+            )
+        ],
+        retrievers=[_FailingRetriever()],
+        top_k=[1],
+    )
+
+    with pytest.raises(EvaluationError, match="failed during evaluation") as error:
+        runner.run()
+
+    assert isinstance(error.value.__cause__, RuntimeError)
 
 
 @pytest.mark.parametrize("top_k", [[], [0], [True], [1, 1]])
@@ -196,7 +280,10 @@ def test_identical_inputs_produce_identical_result_json() -> None:
     first = EvaluationRunner.quick_evaluate(documents=documents, queries=queries)
     second = EvaluationRunner.quick_evaluate(documents=documents, queries=queries)
 
-    assert first.to_json() == second.to_json()
+    assert first.run_id == second.run_id
+    assert first.manifest["seed"] == second.manifest["seed"] == 42
+    assert first.manifest["runtime"] != {}
+    assert first.query_results["keyword"][0].search_latency_ms is not None
 
 
 class _RunnerEmbeddingBackend:

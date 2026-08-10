@@ -130,8 +130,16 @@ indexing or retrieval. Precomputed chunk rankings are not yet supported.
 ## Result contract
 
 `EvaluationResult.schema_version` is `1`. It exposes per-retriever aggregate
-metrics and per-query evidence. `RetrieverMetrics.recall_at(k)` returns the macro
-average Recall@k and raises `KeyError` when k was not evaluated.
+metrics, nearest-rank search latency (`mean_ms`, `p50_ms`, `p95_ms`, `max_ms`,
+`sample_count`, and `failure_count`), and per-query evidence. Each successful
+query records `search_latency_ms`; `warnings` notes unstable p95 estimates below
+20 samples. `RetrieverMetrics.recall_at(k)` returns the macro average Recall@k
+and raises `KeyError` when k was not evaluated.
+
+Latency and environment observations are runtime-only and do not contribute to
+`run_id`. The runner uses seed `42` by default; changing it changes the
+deterministic run identity. Result schema version `1` remains unchanged while
+these additive fields are pre-release additions.
 
 `to_dict()`, `to_json()`, and `save_json(path)` use one canonical JSON-compatible
 schema. JSON output is UTF-8, preserves Japanese text, sorts keys, and has a final

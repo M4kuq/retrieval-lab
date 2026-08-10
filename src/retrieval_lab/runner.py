@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import os
+import platform
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
+from importlib import metadata as importlib_metadata
 from pathlib import Path
+from time import perf_counter_ns
 
 from retrieval_lab.artifacts.cache import (
     CacheRead,
@@ -23,6 +28,7 @@ from retrieval_lab.domain import (
     EvaluationQuery,
     EvaluationResult,
     JSONValue,
+    LatencyStats,
     QueryEvaluation,
     RetrieverMetrics,
 )
@@ -68,6 +74,7 @@ class EvaluationRunner:
         top_k: Sequence[int] = (1, 3, 5, 10),
         chunker: FixedSizeChunker | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
+        seed: int = 42,
     ) -> None:
         """Validate an in-memory retrieval experiment."""
 
@@ -95,6 +102,7 @@ class EvaluationRunner:
                 for query in self._queries
             }
         self._top_k = normalize_top_k(top_k)
+        self._seed = _validate_seed(seed)
         self._chunker = FixedSizeChunker() if chunker is None else chunker
         if not isinstance(self._chunker, FixedSizeChunker):
             raise ConfigurationError("chunker must be a FixedSizeChunker")
@@ -119,6 +127,7 @@ class EvaluationRunner:
         queries: Sequence[EvaluationQuery],
         strategies: Sequence[str] = ("keyword",),
         top_k: Sequence[int] = (1, 3, 5, 10),
+        seed: int = 42,
     ) -> EvaluationResult:
         """Run the supported built-in strategies with their default settings."""
 
@@ -127,6 +136,7 @@ class EvaluationRunner:
             queries=queries,
             strategies=strategies,
             top_k=top_k,
+            seed=seed,
         ).run()
 
     @classmethod
@@ -140,6 +150,7 @@ class EvaluationRunner:
         top_k: Sequence[int] = (1, 3, 5, 10),
         chunker: FixedSizeChunker | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
+        seed: int = 42,
     ) -> EvaluationRunner:
         """Create a runner without discarding graded dataset relevance."""
 
@@ -151,11 +162,12 @@ class EvaluationRunner:
             top_k=top_k,
             chunker=chunker,
             cache_dir=cache_dir,
+            seed=seed,
         )
 
     def run(self) -> EvaluationResult:
         """Build shared chunks, retrieve once per query, and evaluate all cutoffs."""
-
+        started_at = _utc_timestamp()
         chunks: Sequence[Chunk] = self._chunker.chunk(self._documents)
         if not chunks:
             raise CorpusValidationError("chunking produced no evaluable chunks")
@@ -164,6 +176,9 @@ class EvaluationRunner:
 
         metrics: dict[str, RetrieverMetrics] = {}
         query_results: dict[str, tuple[QueryEvaluation, ...]] = {}
+        latency_stats: dict[str, LatencyStats] = {}
+        build_ms: dict[str, float] = {}
+        index_sizes_bytes: dict[str, int] = {}
         max_k = max(self._top_k)
 
         chunk_hash = _chunk_hash(
@@ -173,25 +188,55 @@ class EvaluationRunner:
         )
         cache_events: list[dict[str, JSONValue]] = []
         index_hashes: dict[str, JSONValue] = {}
+        cache_build_ms: dict[str, float] = {}
+        shared_cache_ms = 0.0
         if self._cache_dir is not None:
             chunks, chunk_event = self._prepare_chunk_cache(
                 chunks,
                 chunk_hash=chunk_hash,
             )
             cache_events.append(chunk_event)
-            index_hashes, dense_events = self._prepare_dense_cache(
+            shared_cache_ms = _event_duration_ms(chunk_event)
+            index_hashes, dense_events, dense_build_ms = self._prepare_dense_cache(
                 chunks,
                 chunk_hash=chunk_hash,
             )
             cache_events.extend(dense_events)
+            cache_build_ms.update(dense_build_ms)
 
         for retriever in self._retrievers:
+            build_started_ns = perf_counter_ns()
             try:
                 retriever.index(chunks)
-                evaluations = tuple(
-                    self._evaluate_query(retriever, query, max_k=max_k)
-                    for query in self._queries
-                )
+            except RetrievalLabError:
+                raise
+            except Exception as exc:
+                raise EvaluationError(
+                    f"retriever {retriever.name!r} failed during indexing"
+                ) from exc
+            build_ms[retriever.name] = (
+                _elapsed_ms(build_started_ns)
+                + shared_cache_ms
+                + _cached_dense_build_ms(retriever, cache_build_ms)
+            )
+            index_size = _index_size_bytes(retriever)
+            if index_size is not None:
+                index_sizes_bytes[retriever.name] = index_size
+
+            samples: list[float] = []
+            failures = [0]
+            evaluations: list[QueryEvaluation] = []
+            try:
+                for query in self._queries:
+                    evaluations.append(
+                        self._evaluate_query(
+                            retriever,
+                            query,
+                            max_k=max_k,
+                            latency_samples=samples,
+                            failure_count=failures,
+                        )
+                    )
             except RetrievalLabError:
                 raise
             except Exception as exc:
@@ -199,8 +244,18 @@ class EvaluationRunner:
                     f"retriever {retriever.name!r} failed during evaluation"
                 ) from exc
 
+            stats = LatencyStats.from_samples(
+                samples,
+                failure_count=failures[0],
+            )
+            if stats.warnings:
+                evaluations = [
+                    replace(evaluation, warnings=stats.warnings)
+                    for evaluation in evaluations
+                ]
             metrics[retriever.name] = aggregate_metrics(evaluations, self._top_k)
-            query_results[retriever.name] = evaluations
+            query_results[retriever.name] = tuple(evaluations)
+            latency_stats[retriever.name] = stats
 
         manifest, run_id = _build_manifest(
             documents=self._documents,
@@ -211,15 +266,24 @@ class EvaluationRunner:
             chunker=self._chunker,
             relevance_level=self._relevance_level,
             relevance_grades_by_query=self._relevance_grades_by_query,
+            seed=self._seed,
             chunk_hash=chunk_hash,
             index_hashes=index_hashes,
             cache_events=cache_events,
+            runtime=_runtime_manifest(
+                retrievers=self._retrievers,
+                started_at=started_at,
+                build_ms=build_ms,
+                index_sizes_bytes=index_sizes_bytes,
+                cache_events=cache_events,
+            ),
         )
         return EvaluationResult(
             run_id=run_id,
             metrics=metrics,
             query_results=query_results,
             manifest=manifest,
+            latency=latency_stats,
         )
 
     def _prepare_chunk_cache(
@@ -231,32 +295,49 @@ class EvaluationRunner:
         """Read a safe chunk artifact, rebuilding it on any invalid outcome."""
 
         assert self._cache_dir is not None
-        read = read_chunk_artifact(self._cache_dir, chunk_hash)
-        if read.status is CacheStatus.HIT:
-            cached = read.payload
-            if isinstance(cached, tuple) and cached == tuple(chunks):
-                return tuple(cached), {"artifact": "chunks", "status": "hit"}
-            read = CacheRead(CacheStatus.CORRUPT, reason="chunk content mismatch")
-        write_chunk_artifact(self._cache_dir, chunk_hash, chunks)
-        event: dict[str, JSONValue] = {
-            "artifact": "chunks",
-            "status": read.status.value,
-        }
-        if read.reason is not None:
-            event["reason"] = read.reason
-        return tuple(chunks), event
+        started_ns = perf_counter_ns()
+        try:
+            read = read_chunk_artifact(self._cache_dir, chunk_hash)
+            if read.status is CacheStatus.HIT:
+                cached = read.payload
+                if isinstance(cached, tuple) and cached == tuple(chunks):
+                    event: dict[str, JSONValue] = {
+                        "artifact": "chunks",
+                        "status": "hit",
+                    }
+                    event["duration_ms"] = _elapsed_ms(started_ns)
+                    return tuple(cached), event
+                read = CacheRead(CacheStatus.CORRUPT, reason="chunk content mismatch")
+            write_chunk_artifact(self._cache_dir, chunk_hash, chunks)
+            event = {
+                "artifact": "chunks",
+                "status": read.status.value,
+            }
+            if read.reason is not None:
+                event["reason"] = read.reason
+            event["duration_ms"] = _elapsed_ms(started_ns)
+            return tuple(chunks), event
+        except Exception:
+            # The caller owns the public error translation; timing must not
+            # mask the cache failure with a clock exception.
+            raise
 
     def _prepare_dense_cache(
         self,
         chunks: Sequence[Chunk],
         *,
         chunk_hash: str,
-    ) -> tuple[dict[str, JSONValue], list[dict[str, JSONValue]]]:
+    ) -> tuple[
+        dict[str, JSONValue],
+        list[dict[str, JSONValue]],
+        dict[str, float],
+    ]:
         """Restore or build every shared DenseRetriever before evaluation."""
 
         assert self._cache_dir is not None
         index_hashes: dict[str, JSONValue] = {}
         events: list[dict[str, JSONValue]] = []
+        build_ms: dict[str, float] = {}
         seen: set[int] = set()
         for retriever in _find_dense_retrievers(self._retrievers):
             if id(retriever) in seen:
@@ -269,6 +350,7 @@ class EvaluationRunner:
                 "name": retriever.name,
                 "settings": settings,
             }
+            started_ns = perf_counter_ns()
             read = read_dense_index_artifact(
                 self._cache_dir,
                 index_hash=index_hash,
@@ -300,6 +382,8 @@ class EvaluationRunner:
                     event["status"] = CacheStatus.CORRUPT.value
                     event["reason"] = str(exc)
                 else:
+                    event["duration_ms"] = _elapsed_ms(started_ns)
+                    build_ms[retriever.name] = _event_duration_ms(event)
                     events.append(event)
                     continue
 
@@ -324,8 +408,10 @@ class EvaluationRunner:
                 raise EvaluationError(
                     f"dense retriever {retriever.name!r} cache rebuild failed"
                 ) from exc
+            event["duration_ms"] = _elapsed_ms(started_ns)
+            build_ms[retriever.name] = _event_duration_ms(event)
             events.append(event)
-        return index_hashes, events
+        return index_hashes, events, build_ms
 
     def _evaluate_query(
         self,
@@ -333,8 +419,18 @@ class EvaluationRunner:
         query: EvaluationQuery,
         *,
         max_k: int,
+        latency_samples: list[float],
+        failure_count: list[int],
     ) -> QueryEvaluation:
-        raw_results = retriever.search(query.query, max_k)
+        started_ns = perf_counter_ns()
+        try:
+            raw_results = retriever.search(query.query, max_k)
+        except Exception:
+            _elapsed_ms(started_ns)
+            failure_count[0] += 1
+            raise
+        search_latency_ms = _elapsed_ms(started_ns)
+        latency_samples.append(search_latency_ms)
         ranked_chunks = stable_rank_results(raw_results, top_k=max_k)
         if self._relevance_level == "document":
             if not query.relevant_document_ids:
@@ -357,6 +453,7 @@ class EvaluationRunner:
             retrieved_ids=retrieved_ids,
             relevance_grades=self._relevance_grades_by_query[query.id],
             top_k=self._top_k,
+            search_latency_ms=search_latency_ms,
         )
 
 
@@ -372,6 +469,132 @@ def _validate_documents(documents: Sequence[Document]) -> tuple[Document, ...]:
     if len(set(identifiers)) != len(identifiers):
         raise CorpusValidationError("document IDs must be unique")
     return normalized
+
+
+def _validate_seed(seed: object) -> int:
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ConfigurationError("seed must be a non-negative integer")
+    return seed
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _elapsed_ms(started_ns: int) -> float:
+    elapsed = perf_counter_ns() - started_ns
+    # A monotonic clock should never go backwards, but injected clocks in tests
+    # can be imperfect. Do not emit a negative runtime value.
+    return max(0.0, elapsed / 1_000_000.0)
+
+
+def _event_duration_ms(event: Mapping[str, JSONValue]) -> float:
+    value = event.get("duration_ms", 0.0)
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _index_size_bytes(retriever: BaseRetriever) -> int | None:
+    """Return exact in-memory vector bytes when a built-in index exposes them."""
+
+    for attribute in ("index_size_bytes", "index_size"):
+        value = getattr(retriever, attribute, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    if isinstance(retriever, DenseRetriever):
+        dimension = retriever._dimension
+        if dimension is None:
+            return None
+        return len(retriever._vectors) * dimension * 8
+    if isinstance(retriever, HybridRetriever):
+        sizes: list[int] = []
+        seen: set[int] = set()
+        for source in retriever._sources:
+            if id(source) in seen:
+                continue
+            seen.add(id(source))
+            size = _index_size_bytes(source)
+            if size is not None:
+                sizes.append(size)
+        return sum(sizes) if sizes else None
+    return None
+
+
+def _cached_dense_build_ms(
+    retriever: BaseRetriever,
+    build_ms_by_name: Mapping[str, float],
+) -> float:
+    """Attribute cached Dense preparation to each top-level strategy using it."""
+
+    if isinstance(retriever, DenseRetriever):
+        return build_ms_by_name.get(retriever.name, 0.0)
+    if not isinstance(retriever, HybridRetriever):
+        return 0.0
+
+    duration_ms = 0.0
+    seen: set[int] = set()
+    for source in retriever._sources:
+        if not isinstance(source, DenseRetriever) or id(source) in seen:
+            continue
+        seen.add(id(source))
+        duration_ms += build_ms_by_name.get(source.name, 0.0)
+    return duration_ms
+
+
+def _optional_dependency_versions(
+    retrievers: Sequence[BaseRetriever],
+) -> dict[str, JSONValue]:
+    """Read metadata versions without importing optional heavy modules."""
+
+    used_dense = any(
+        isinstance(retriever, DenseRetriever)
+        or (
+            isinstance(retriever, HybridRetriever)
+            and any(isinstance(source, DenseRetriever) for source in retriever._sources)
+        )
+        for retriever in retrievers
+    )
+    if not used_dense:
+        return {}
+    try:
+        version = importlib_metadata.version("sentence-transformers")
+    except importlib_metadata.PackageNotFoundError:
+        return {}
+    return {"sentence-transformers": version}
+
+
+def _runtime_manifest(
+    *,
+    retrievers: Sequence[BaseRetriever],
+    started_at: str,
+    build_ms: Mapping[str, float],
+    index_sizes_bytes: Mapping[str, int],
+    cache_events: Sequence[Mapping[str, JSONValue]],
+) -> dict[str, JSONValue]:
+    """Create non-deterministic environment and runtime observations."""
+
+    try:
+        retrieval_lab_version = importlib_metadata.version("retrieval-lab")
+    except importlib_metadata.PackageNotFoundError:
+        retrieval_lab_version = "0.1.0.dev0"
+    system = platform.system()
+    release = platform.release()
+    machine = platform.machine()
+    dependencies = _optional_dependency_versions(retrievers)
+    return {
+        "build_ms": {name: build_ms[name] for name in sorted(build_ms)},
+        "cache_events": [
+            {key: event[key] for key in sorted(event)} for event in cache_events
+        ],
+        "dependencies": dependencies,
+        "finished_at_utc": _utc_timestamp(),
+        "index_sizes_bytes": {
+            name: index_sizes_bytes[name] for name in sorted(index_sizes_bytes)
+        },
+        "os": {"machine": machine, "release": release, "system": system},
+        "python_version": platform.python_version(),
+        "retrieval_lab_version": retrieval_lab_version,
+        "started_at_utc": started_at,
+    }
 
 
 def _validate_queries(
@@ -442,9 +665,11 @@ def _build_manifest(
     chunker: FixedSizeChunker,
     relevance_level: RelevanceLevel,
     relevance_grades_by_query: Mapping[str, Mapping[str, int]],
+    seed: int = 42,
     chunk_hash: str | None = None,
     index_hashes: Mapping[str, JSONValue] | None = None,
     cache_events: Sequence[Mapping[str, JSONValue]] = (),
+    runtime: Mapping[str, JSONValue] | None = None,
 ) -> tuple[dict[str, JSONValue], str]:
     corpus_payload: list[JSONValue] = []
     for document in documents:
@@ -489,6 +714,7 @@ def _build_manifest(
         "relevance_level": relevance_level,
         "retrievers": _json_values(retriever_names),
         "retriever_settings": retriever_settings,
+        "seed": seed,
         "top_k": _json_values(top_k),
     }
     run_id = content_hash(run_payload)
@@ -505,6 +731,7 @@ def _build_manifest(
         "relevance_level": relevance_level,
         "retrievers": _json_values(retriever_names),
         "retriever_settings": retriever_settings,
+        "seed": seed,
         "top_k": _json_values(top_k),
     }
     if index_hashes:
@@ -519,6 +746,8 @@ def _build_manifest(
                 {key: event[key] for key in sorted(event)} for event in cache_events
             ]
         }
+    if runtime is not None:
+        manifest["runtime"] = plain_json(runtime)
     return manifest, run_id
 
 

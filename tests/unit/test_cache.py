@@ -377,9 +377,10 @@ def test_chunk_cache_is_usable_without_dense_retrieval(tmp_path: Path) -> None:
     second = run()
 
     assert first.run_id == second.run_id  # type: ignore[union-attr]
-    assert second.manifest["runtime"]["cache_events"] == [  # type: ignore[index,union-attr]
-        {"artifact": "chunks", "status": "hit"}
-    ]
+    events = second.manifest["runtime"]["cache_events"]  # type: ignore[index,union-attr]
+    assert events[0]["artifact"] == "chunks"  # type: ignore[index]
+    assert events[0]["status"] == "hit"  # type: ignore[index]
+    assert events[0]["duration_ms"] >= 0.0  # type: ignore[index]
 
 
 def test_runner_corrupt_dense_cache_rebuilds_with_explicit_status(
@@ -416,3 +417,69 @@ def test_shared_dense_instance_inside_hybrid_is_encoded_once(tmp_path: Path) -> 
     ).run()
     assert result.run_id
     assert backend.calls.count(("passage: chunk text",)) == 1
+
+
+def test_hybrid_build_time_includes_cached_dense_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = iter(
+        [
+            0,
+            1_000_000,  # chunk cache
+            2_000_000,
+            7_000_000,  # Dense cache preparation
+            8_000_000,
+            10_000_000,  # Hybrid index call
+            11_000_000,
+            12_000_000,  # query search
+        ]
+    )
+    monkeypatch.setattr("retrieval_lab.runner.perf_counter_ns", lambda: next(clock))
+    dense = DenseRetriever(backend=_Backend())
+    hybrid = HybridRetriever([dense, KeywordRetriever()], candidate_k=2)
+
+    result = EvaluationRunner(
+        documents=[Document(id="document", text="chunk text")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="find",
+                relevant_document_ids={"document"},
+            )
+        ],
+        retrievers=[hybrid],
+        top_k=[1],
+        cache_dir=tmp_path,
+    ).run()
+
+    runtime = result.manifest["runtime"]
+    assert runtime["build_ms"] == {"hybrid": 8.0}  # type: ignore[index]
+
+
+def test_runtime_manifest_never_serializes_cache_path_or_environment_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_dir = tmp_path / "absolute-secret-cache-path"
+    monkeypatch.setenv("RETRIEVAL_LAB_TEST_SECRET", "do-not-record-this-value")
+
+    result = EvaluationRunner(
+        documents=[Document(id="document", text="chunk text")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="find",
+                relevant_document_ids={"document"},
+            )
+        ],
+        retrievers=[KeywordRetriever()],
+        top_k=[1],
+        cache_dir=cache_dir,
+    ).run()
+
+    serialized = result.to_json()
+    assert str(cache_dir) not in serialized
+    assert "absolute-secret-cache-path" not in serialized
+    assert "RETRIEVAL_LAB_TEST_SECRET" not in serialized
+    assert "do-not-record-this-value" not in serialized
