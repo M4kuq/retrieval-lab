@@ -42,11 +42,15 @@ from retrieval_lab.loaders import load_documents
 from retrieval_lab.retrievers import (
     BaseRetriever,
     BM25Retriever,
+    CallableRetriever,
     DenseRetriever,
     EmbeddingBackend,
     EmbeddingModelMetadata,
     HybridRetriever,
     KeywordRetriever,
+    RetrievedItem,
+    Retriever,
+    evaluate_retrievers,
 )
 from retrieval_lab.runner import EvaluationRunner
 
@@ -54,6 +58,7 @@ __all__ = [
     "BM25Retriever",
     "BM25RetrieverConfig",
     "BaseRetriever",
+    "CallableRetriever",
     "Chunk",
     "ChunkerConfig",
     "ConfigurationError",
@@ -87,11 +92,14 @@ __all__ = [
     "ReportConfig",
     "RetrievalConfig",
     "RetrievalLabError",
+    "RetrievedItem",
     "RetrievedQueryResult",
+    "Retriever",
     "RetrieverContractError",
     "RetrieverMetrics",
     "SearchResult",
     "evaluate_results",
+    "evaluate_retrievers",
     "load_config",
     "load_documents",
     "validate_dataset",

@@ -27,6 +27,10 @@ def __getattr__(name: str) -> object:
             "RetrievedQueryResult": RetrievedQueryResult,
             "evaluate_results": evaluate_results,
         }[name]
+    if name == "evaluate_retrievers":
+        from retrieval_lab.retrievers.callable import evaluate_retrievers
+
+        return evaluate_retrievers
     raise AttributeError(name)
 
 
@@ -35,6 +39,7 @@ __all__ = [
     "RetrievedQueryResult",
     "average_precision_at_k",
     "evaluate_results",
+    "evaluate_retrievers",
     "hit_rate_at_k",
     "ndcg_at_k",
     "nearest_rank_percentile",
