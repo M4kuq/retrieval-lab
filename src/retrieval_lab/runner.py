@@ -7,13 +7,14 @@ import platform
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
-from fnmatch import fnmatchcase
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from time import perf_counter_ns
 from typing import TYPE_CHECKING
 
 from retrieval_lab.artifacts.cache import (
+    CACHE_MAX_BYTES,
+    CacheCapacityError,
     CacheRead,
     CacheStatus,
     dense_index_hash,
@@ -65,6 +66,8 @@ from retrieval_lab.retrievers import (
 if TYPE_CHECKING:
     from retrieval_lab.config import RetrievalConfig
 
+DEFAULT_CACHE_MAX_BYTES = CACHE_MAX_BYTES
+
 
 class EvaluationRunner:
     """Evaluate one or more retrievers over shared documents and queries."""
@@ -80,6 +83,7 @@ class EvaluationRunner:
         top_k: Sequence[int] = (1, 3, 5, 10),
         chunker: FixedSizeChunker | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
+        cache_max_bytes: int = DEFAULT_CACHE_MAX_BYTES,
         seed: int = 42,
         _config_settings: Mapping[str, JSONValue] | None = None,
     ) -> None:
@@ -114,6 +118,7 @@ class EvaluationRunner:
         if not isinstance(self._chunker, FixedSizeChunker):
             raise ConfigurationError("chunker must be a FixedSizeChunker")
         self._retrievers = _resolve_retrievers(retrievers, strategies)
+        self._cache_max_bytes = _validate_cache_max_bytes(cache_max_bytes)
         if cache_dir is None:
             self._cache_dir: Path | None = None
         else:
@@ -152,18 +157,10 @@ class EvaluationRunner:
 
         if not isinstance(config, RetrievalConfig):
             raise ConfigurationError("config must be a RetrievalConfig")
-        documents = load_documents(config.corpus.path)
-        if config.corpus.include:
-            documents = tuple(
-                document
-                for document in documents
-                if document.source is not None
-                and _matches_include(document.source, config.corpus.include)
-            )
-            if not documents:
-                raise CorpusValidationError(
-                    "corpus.include matched no documents; adjust the configured globs"
-                )
+        documents = load_documents(
+            config.corpus.path,
+            include=config.corpus.include,
+        )
         dataset = EvaluationDataset.from_jsonl(
             config.dataset.path,
             relevance_level=config.dataset.relevance_level,
@@ -238,6 +235,7 @@ class EvaluationRunner:
         top_k: Sequence[int] = (1, 3, 5, 10),
         chunker: FixedSizeChunker | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
+        cache_max_bytes: int = DEFAULT_CACHE_MAX_BYTES,
         seed: int = 42,
     ) -> EvaluationRunner:
         """Create a runner without discarding graded dataset relevance."""
@@ -250,6 +248,7 @@ class EvaluationRunner:
             top_k=top_k,
             chunker=chunker,
             cache_dir=cache_dir,
+            cache_max_bytes=cache_max_bytes,
             seed=seed,
         )
 
@@ -401,7 +400,11 @@ class EvaluationRunner:
         assert self._cache_dir is not None
         started_ns = perf_counter_ns()
         try:
-            read = read_chunk_artifact(self._cache_dir, chunk_hash)
+            read = read_chunk_artifact(
+                self._cache_dir,
+                chunk_hash,
+                max_bytes=self._cache_max_bytes,
+            )
             if read.status is CacheStatus.HIT:
                 cached = read.payload
                 if isinstance(cached, tuple) and cached == tuple(chunks):
@@ -412,7 +415,21 @@ class EvaluationRunner:
                     event["duration_ms"] = _elapsed_ms(started_ns)
                     return tuple(cached), event
                 read = CacheRead(CacheStatus.CORRUPT, reason="chunk content mismatch")
-            write_chunk_artifact(self._cache_dir, chunk_hash, chunks)
+            try:
+                write_chunk_artifact(
+                    self._cache_dir,
+                    chunk_hash,
+                    chunks,
+                    max_bytes=self._cache_max_bytes,
+                )
+            except CacheCapacityError:
+                event = {
+                    "artifact": "chunks",
+                    "status": "skipped",
+                    "reason": "cache artifact exceeds configured capacity",
+                    "duration_ms": _elapsed_ms(started_ns),
+                }
+                return tuple(chunks), event
             event = {
                 "artifact": "chunks",
                 "status": read.status.value,
@@ -466,6 +483,7 @@ class EvaluationRunner:
                 expected_resolved_revision=_optional_string(
                     settings.get("resolved_revision")
                 ),
+                max_bytes=self._cache_max_bytes,
             )
             event: dict[str, JSONValue] = {
                 "artifact": "dense_index",
@@ -494,18 +512,23 @@ class EvaluationRunner:
             try:
                 retriever.index(chunks)
                 indexed_chunks, vectors, dimension, metadata = retriever._cache_export()
-                write_dense_index_artifact(
-                    self._cache_dir,
-                    index_hash=index_hash,
-                    chunk_hash=chunk_hash,
-                    retriever_identity=identity,
-                    chunks=indexed_chunks,
-                    vectors=vectors,
-                    dimension=dimension,
-                    model_id=metadata.model_id,
-                    requested_revision=metadata.requested_revision,
-                    resolved_revision=metadata.resolved_revision,
-                )
+                try:
+                    write_dense_index_artifact(
+                        self._cache_dir,
+                        index_hash=index_hash,
+                        chunk_hash=chunk_hash,
+                        retriever_identity=identity,
+                        chunks=indexed_chunks,
+                        vectors=vectors,
+                        dimension=dimension,
+                        model_id=metadata.model_id,
+                        requested_revision=metadata.requested_revision,
+                        resolved_revision=metadata.resolved_revision,
+                        max_bytes=self._cache_max_bytes,
+                    )
+                except CacheCapacityError:
+                    event["status"] = "skipped"
+                    event["reason"] = "cache artifact exceeds configured capacity"
             except RetrievalLabError:
                 raise
             except Exception as exc:
@@ -575,25 +598,16 @@ def _validate_documents(documents: Sequence[Document]) -> tuple[Document, ...]:
     return normalized
 
 
-def _matches_include(source: str, patterns: Sequence[str]) -> bool:
-    """Match POSIX-style corpus globs, including root files under ``**/``."""
-
-    normalized_source = source.replace("\\", "/")
-    for raw_pattern in patterns:
-        pattern = raw_pattern.replace("\\", "/")
-        if fnmatchcase(normalized_source, pattern):
-            return True
-        if pattern.startswith("**/") and fnmatchcase(
-            normalized_source, pattern.removeprefix("**/")
-        ):
-            return True
-    return False
-
-
 def _validate_seed(seed: object) -> int:
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ConfigurationError("seed must be a non-negative integer")
     return seed
+
+
+def _validate_cache_max_bytes(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigurationError("cache_max_bytes must be a positive integer")
+    return value
 
 
 def _utc_timestamp() -> str:

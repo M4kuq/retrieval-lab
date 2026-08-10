@@ -184,7 +184,11 @@ exists in the shared chunk artifact.
 `EvaluationRunner` and `from_dataset()` accept an optional `cache_dir`. When set,
 the runner persists validated, content-addressed chunk and Dense-index artifacts as
 canonical JSON. Invalid or incompatible cache data is reported in runtime manifest
-events and rebuilt. Cache state does not change the deterministic `run_id`.
+events and rebuilt. `cache_max_bytes` bounds each cache read and streamed write;
+it defaults to 64 MiB and must be a positive integer. An artifact that exceeds the
+limit is left uncached and reported as `skipped`, without failing the evaluation.
+`from_config()` uses the default limit. Cache state does not change the
+deterministic `run_id`.
 
 `EvaluationRunner(...).run()` uses the same application path as
 `quick_evaluate`; the classmethod is convenience syntax, not separate logic.

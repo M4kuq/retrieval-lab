@@ -10,6 +10,7 @@ from retrieval_lab import (
     ChunkerConfig,
     ConfigurationError,
     CorpusConfig,
+    CorpusValidationError,
     DatasetConfig,
     DenseRetrieverConfig,
     EvaluationConfig,
@@ -100,6 +101,21 @@ def test_load_config_and_yaml_runner_are_deterministic(tmp_path: Path) -> None:
     assert result.metrics == direct.metrics
     assert result.manifest["config"]["experiment"]["cache_dir"] == "cache"  # type: ignore[index]
     assert str(tmp_path) not in result.to_json()
+
+
+def test_runner_config_include_no_match_reports_actionable_error(
+    tmp_path: Path,
+) -> None:
+    path = _write_fixture(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'include: ["**/*.txt"]', 'include: ["**/*.md"]'
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CorpusValidationError, match="include matched no documents"):
+        EvaluationRunner.from_config(path)
 
 
 @pytest.mark.parametrize(
@@ -533,6 +549,45 @@ def test_config_rejects_unreadable_and_non_mapping_inputs(tmp_path: Path) -> Non
     path = tmp_path / "list.yaml"
     path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
     with pytest.raises(ConfigurationError, match="config"):
+        load_config(path)
+
+
+def test_config_rejects_invalid_utf8_as_configuration_error(tmp_path: Path) -> None:
+    path = tmp_path / "invalid.yaml"
+    path.write_bytes(b"schema_version: 1\n\xff")
+
+    with pytest.raises(ConfigurationError, match="cannot read configuration"):
+        load_config(path)
+
+
+def test_config_rejects_huge_yaml_numeric_conversion(tmp_path: Path) -> None:
+    path = _write_fixture(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        "  - name: keyword\n    type: keyword",
+        "  - name: bm25\n    type: bm25\n    k1: " + "9" * 4000,
+    ).replace("retriever: keyword", "retriever: bm25")
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match=r"invalid YAML|retrievers\[0\]\.k1"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "[unhashable]: value\n",
+        "schema_version: 1\nexperiment:\n  1: value\n",
+        "schema_version: 1\nexperiment:\n  1: value\n  text: value\n",
+    ],
+)
+def test_config_rejects_unhashable_and_non_string_yaml_mapping_keys(
+    tmp_path: Path, content: str
+) -> None:
+    path = tmp_path / "invalid.yaml"
+    path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match=r"invalid YAML|field names"):
         load_config(path)
 
 

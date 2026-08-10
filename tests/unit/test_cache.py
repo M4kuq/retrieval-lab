@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
@@ -108,6 +110,169 @@ def test_chunk_artifact_round_trip_and_generated_safe_path(tmp_path: Path) -> No
 def test_canonical_json_rejects_non_json_values(value: object) -> None:
     with pytest.raises(EvaluationError):
         canonical_json_bytes(cast(object, value))  # type: ignore[arg-type]
+
+
+def test_cache_json_validation_checks_nested_key_types_before_sorting() -> None:
+    with pytest.raises(EvaluationError, match="keys must be strings"):
+        dense_index_hash(  # type: ignore[arg-type]
+            "a" * 64,
+            {"nested": {1: "bad", "good": {"also": "valid"}}},
+        )
+
+
+def test_cache_json_validation_wraps_cycles_and_deep_nesting() -> None:
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+    with pytest.raises(EvaluationError, match=r"deeply nested|canonical JSON"):
+        dense_index_hash("a" * 64, cyclic)  # type: ignore[arg-type]
+
+    deep: object = "leaf"
+    for _ in range(2_000):
+        deep = {"nested": deep}
+    with pytest.raises(EvaluationError, match=r"deeply nested|canonical JSON"):
+        dense_index_hash("a" * 64, {"deep": deep})  # type: ignore[arg-type]
+
+
+def test_cache_reader_rejects_artifacts_over_its_byte_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    digest = "a" * 64
+    path = chunk_path(tmp_path, digest)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"{}")
+    monkeypatch.setattr(cache_module, "_MAX_CACHE_BYTES", 1)
+
+    result = read_chunk_artifact(tmp_path, digest)
+
+    assert result.status is CacheStatus.CORRUPT
+    assert result.reason is not None and "max_bytes" in result.reason
+
+
+def test_cache_writer_and_reader_share_the_same_byte_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roundtrip_digest = "d" * 64
+    write_chunk_artifact(
+        tmp_path,
+        roundtrip_digest,
+        [_chunk()],
+        max_bytes=1024 * 1024,
+    )
+    assert (
+        read_chunk_artifact(
+            tmp_path,
+            roundtrip_digest,
+            max_bytes=1024 * 1024,
+        ).status
+        is CacheStatus.HIT
+    )
+
+    digest = "c" * 64
+    monkeypatch.setattr(cache_module, "_MAX_CACHE_BYTES", 1)
+
+    with pytest.raises(EvaluationError, match="max_bytes"):
+        write_chunk_artifact(tmp_path, digest, [_chunk()])
+    assert not chunk_path(tmp_path, digest).exists()
+
+
+def test_cache_reader_handles_short_reads_and_sysmax_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    digest = "e" * 64
+    write_chunk_artifact(tmp_path, digest, [_chunk()])
+    original_read = cache_module.os.read
+    calls = 0
+
+    def short_read(descriptor: int, size: int) -> bytes:
+        nonlocal calls
+        calls += 1
+        return original_read(descriptor, min(size, 1))
+
+    monkeypatch.setattr(cache_module.os, "read", short_read)
+    result = read_chunk_artifact(tmp_path, digest, max_bytes=sys.maxsize)
+
+    assert result.status is CacheStatus.HIT
+    assert calls > 100
+
+
+def test_cache_reader_detects_growth_after_fstat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    digest = "f" * 64
+    write_chunk_artifact(tmp_path, digest, [_chunk()])
+    original_fstat = cache_module.os.fstat
+
+    def pretend_empty(descriptor: int) -> os.stat_result:
+        result = original_fstat(descriptor)
+        values = list(result)
+        values[6] = 0
+        return os.stat_result(values)
+
+    monkeypatch.setattr(cache_module.os, "fstat", pretend_empty)
+    result = read_chunk_artifact(tmp_path, digest, max_bytes=1)
+
+    assert result.status is CacheStatus.CORRUPT
+    assert result.reason is not None and "max_bytes" in result.reason
+
+
+def test_cache_reader_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("named pipes are unavailable")
+    digest = "b" * 64
+    path = chunk_path(tmp_path, digest)
+    path.parent.mkdir(parents=True)
+    try:
+        os.mkfifo(path)
+    except OSError:
+        pytest.skip("named pipes are unavailable")
+
+    result = read_chunk_artifact(tmp_path, digest)
+
+    assert result.status is CacheStatus.CORRUPT
+
+
+def test_runner_skips_oversize_cache_and_reuses_sufficient_cache(
+    tmp_path: Path,
+) -> None:
+    documents = [Document(id="document", text="chunk text")]
+    queries = [
+        EvaluationQuery(
+            id="query",
+            query="chunk",
+            relevant_document_ids={"document"},
+        )
+    ]
+    skipped = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        strategies=["keyword"],
+        top_k=[1],
+        cache_dir=tmp_path / "tiny",
+        cache_max_bytes=1,
+    ).run()
+    skipped_events = skipped.manifest["runtime"]["cache_events"]  # type: ignore[index]
+    skipped_event = skipped_events[0]  # type: ignore[index]
+    assert skipped_event["status"] == "skipped"  # type: ignore[index]
+
+    first = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        strategies=["keyword"],
+        top_k=[1],
+        cache_dir=tmp_path / "sufficient",
+        cache_max_bytes=1024 * 1024,
+    ).run()
+    second = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        strategies=["keyword"],
+        top_k=[1],
+        cache_dir=tmp_path / "sufficient",
+        cache_max_bytes=1024 * 1024,
+    ).run()
+    assert first.run_id == second.run_id
+    warm_event = second.manifest["runtime"]["cache_events"][0]  # type: ignore[index]
+    assert warm_event["status"] == "hit"  # type: ignore[index]
 
 
 def test_cache_path_rejects_bytes_root(tmp_path: Path) -> None:

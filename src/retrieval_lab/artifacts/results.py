@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 
 _MAX_RESULT_BYTES = 64 * 1024 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
 _REQUIRED_ROOT = {"schema_version", "run", "retrievers", "quality_gates"}
 _REQUIRED_RUN = {"id", "manifest"}
 _REQUIRED_RETRIEVER = {"metrics", "per_query"}
@@ -495,6 +497,34 @@ def _validate_max_bytes(max_bytes: object) -> int:
     return max_bytes
 
 
+class _ResultReadLimitError(EvaluationError):
+    pass
+
+
+def _read_bounded(path: Path, limit: int) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("result path is not a regular file")
+        if metadata.st_size > limit:
+            raise _ResultReadLimitError(f"result file exceeds max_bytes ({limit})")
+        data = bytearray()
+        while True:
+            request = min(_READ_CHUNK_BYTES, limit + 1 - len(data))
+            if request <= 0:
+                raise _ResultReadLimitError(f"result file exceeds max_bytes ({limit})")
+            block = os.read(descriptor, request)
+            if not block:
+                return bytes(data)
+            data.extend(block)
+            if len(data) > limit:
+                raise _ResultReadLimitError(f"result file exceeds max_bytes ({limit})")
+    finally:
+        os.close(descriptor)
+
+
 def load_result(
     path: str | os.PathLike[str],
     *,
@@ -505,12 +535,7 @@ def load_result(
     limit = _validate_max_bytes(max_bytes)
     try:
         source = Path(path)
-        size = source.stat().st_size
-        if size > limit:
-            raise EvaluationError(f"result file exceeds max_bytes ({limit})")
-        raw = source.read_bytes()
-        if len(raw) > limit:
-            raise EvaluationError(f"result file exceeds max_bytes ({limit})")
+        raw = _read_bounded(source, limit)
         text = raw.decode("utf-8")
     except EvaluationError:
         raise
