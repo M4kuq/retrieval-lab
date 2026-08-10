@@ -238,6 +238,7 @@ def load_benchmark(path: str | os.PathLike[str]) -> dict[str, JSONValue]:
         raise EvaluationError("benchmark report is not valid strict JSON") from exc
     if not isinstance(value, dict):
         raise EvaluationError("benchmark report root must be an object")
+    _ensure_finite_json(value)
     _validate_report_shape(value)
     return cast(dict[str, JSONValue], value)
 
