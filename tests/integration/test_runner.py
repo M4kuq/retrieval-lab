@@ -116,6 +116,19 @@ class _FailingRetriever(_CountingRetriever):
         raise RuntimeError("provider secret must remain chained, not serialized")
 
 
+class _NoSizeProbeRetriever(_CountingRetriever):
+    def __getattribute__(self, attribute: str) -> object:
+        if attribute in {"index_size", "index_size_bytes"}:
+            raise AssertionError("custom retriever size attributes must not be probed")
+        return super().__getattribute__(attribute)
+
+
+class _NoSizeKeywordRetriever(KeywordRetriever):
+    @property
+    def index_size_bytes(self) -> int:
+        raise AssertionError("custom subclass size must not be probed")
+
+
 def test_runner_searches_once_at_max_k_and_accepts_custom_retriever() -> None:
     retriever = _CountingRetriever()
     runner = EvaluationRunner(
@@ -135,6 +148,64 @@ def test_runner_searches_once_at_max_k_and_accepts_custom_retriever() -> None:
 
     assert retriever.search_cutoffs == [3]
     assert result.metrics["counting"].recall_at(1) == 1.0
+
+
+def test_runner_does_not_probe_undeclared_custom_index_size_attributes() -> None:
+    result = EvaluationRunner(
+        documents=[Document(id="doc", text="relevant")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="relevant",
+                relevant_document_ids={"doc"},
+            )
+        ],
+        retrievers=[_NoSizeProbeRetriever()],
+        top_k=[1],
+    ).run()
+
+    assert result.manifest["runtime"]["index_sizes_bytes"] == {}  # type: ignore[index]
+
+
+def test_runner_does_not_probe_builtin_subclass_index_size_attributes() -> None:
+    result = EvaluationRunner(
+        documents=[Document(id="doc", text="relevant")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="relevant",
+                relevant_document_ids={"doc"},
+            )
+        ],
+        retrievers=[_NoSizeKeywordRetriever()],
+        top_k=[1],
+    ).run()
+
+    assert result.manifest["runtime"]["index_sizes_bytes"] == {}  # type: ignore[index]
+
+
+def test_runner_translates_builtin_index_size_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(_retriever: KeywordRetriever) -> int:
+        raise RuntimeError("size probe failed")
+
+    monkeypatch.setattr(KeywordRetriever, "index_size_bytes", property(fail))
+    with pytest.raises(EvaluationError, match="measuring index size") as error:
+        EvaluationRunner(
+            documents=[Document(id="doc", text="relevant")],
+            queries=[
+                EvaluationQuery(
+                    id="query",
+                    query="relevant",
+                    relevant_document_ids={"doc"},
+                )
+            ],
+            strategies=["keyword"],
+            top_k=[1],
+        ).run()
+
+    assert isinstance(error.value.__cause__, RuntimeError)
 
 
 def test_runner_uses_injected_monotonic_clock_for_build_and_search(
@@ -361,6 +432,29 @@ def test_runner_evaluates_keyword_bm25_dense_and_hybrid_on_shared_chunks() -> No
     assert result.manifest["retrievers"] == ["keyword", "bm25", "dense", "hybrid"]
     assert result.manifest["chunk_hash"]
     assert result.manifest["retriever_settings"]["hybrid"] == hybrid.settings
+    sizes = result.manifest["runtime"]["index_sizes_bytes"]  # type: ignore[index]
+    assert set(sizes) == {"bm25", "dense", "hybrid", "keyword"}
+    assert all(isinstance(size, int) and size >= 0 for size in sizes.values())
+
+
+def test_runtime_dependencies_only_include_default_dense_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_version = runner_module.importlib_metadata.version
+
+    def fake_version(distribution: str) -> str:
+        if distribution == "sentence-transformers":
+            return "5.0.0"
+        return original_version(distribution)
+
+    monkeypatch.setattr(runner_module.importlib_metadata, "version", fake_version)
+    custom_dense = DenseRetriever(backend=_RunnerEmbeddingBackend())
+    hybrid = HybridRetriever([KeywordRetriever(), custom_dense])
+
+    assert runner_module._optional_dependency_versions([custom_dense, hybrid]) == {}
+    assert runner_module._optional_dependency_versions([DenseRetriever()]) == {
+        "sentence-transformers": "5.0.0"
+    }
 
 
 def test_dense_settings_change_deterministic_run_id() -> None:

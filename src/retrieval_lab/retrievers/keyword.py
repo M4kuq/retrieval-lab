@@ -5,7 +5,11 @@ from collections.abc import Sequence
 
 from retrieval_lab.exceptions import RetrieverContractError
 from retrieval_lab.models import Chunk, SearchResult
-from retrieval_lab.retrievers.base import BaseRetriever
+from retrieval_lab.retrievers.base import (
+    BaseRetriever,
+    _chunk_payload,
+    _serialized_index_size_bytes,
+)
 
 
 def _normalize(value: str) -> str:
@@ -23,6 +27,23 @@ class KeywordRetriever(BaseRetriever):
     def name(self) -> str:
         """Return the strategy name used by the evaluation runner."""
         return "keyword"
+
+    @property
+    def index_size_bytes(self) -> int | None:
+        """Return the deterministic logical size of the indexed chunks.
+
+        Keyword retrieval keeps the shared chunks and normalizes them at query
+        time, so its index footprint is represented by the serialized chunk
+        payload rather than by a process-specific Python object size.
+        """
+
+        if self._chunks is None:
+            return None
+        if not self._chunks:
+            return 0
+        return _serialized_index_size_bytes(
+            [_chunk_payload(chunk) for chunk in self._chunks]
+        )
 
     def index(self, chunks: Sequence[Chunk]) -> None:
         """Replace the in-memory index, rejecting duplicate chunk identifiers."""

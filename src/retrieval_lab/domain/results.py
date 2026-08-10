@@ -115,17 +115,24 @@ class QueryEvaluation:
         )
         if self.search_latency_ms is not None:
             latency = self.search_latency_ms
-            if (
-                isinstance(latency, bool)
-                or not isinstance(latency, (int, float))
-                or not math.isfinite(float(latency))
-                or float(latency) < 0.0
-            ):
+            if isinstance(latency, bool) or not isinstance(latency, (int, float)):
                 raise EvaluationError(
                     f"QueryEvaluation[{query_id!r}].search_latency_ms must be a "
                     "finite non-negative number"
                 )
-            object.__setattr__(self, "search_latency_ms", float(latency))
+            try:
+                normalized_latency = float(latency)
+            except OverflowError as exc:
+                raise EvaluationError(
+                    f"QueryEvaluation[{query_id!r}].search_latency_ms must be a "
+                    "finite non-negative number"
+                ) from exc
+            if not math.isfinite(normalized_latency) or normalized_latency < 0.0:
+                raise EvaluationError(
+                    f"QueryEvaluation[{query_id!r}].search_latency_ms must be a "
+                    "finite non-negative number"
+                )
+            object.__setattr__(self, "search_latency_ms", normalized_latency)
         if isinstance(self.warnings, (str, bytes)) or not isinstance(
             self.warnings, Sequence
         ):

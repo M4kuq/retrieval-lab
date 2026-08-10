@@ -1,9 +1,36 @@
 """Base contract for synchronous retrievers."""
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 
 from retrieval_lab.models import Chunk, JSONValue, SearchResult
+
+
+def _chunk_payload(chunk: Chunk) -> dict[str, object]:
+    """Return the stable logical payload retained by built-in indexes."""
+
+    return {
+        "document_id": chunk.document_id,
+        "end_offset": chunk.end_offset,
+        "id": chunk.id,
+        "metadata": dict(chunk.metadata),
+        "start_offset": chunk.start_offset,
+        "text": chunk.text,
+    }
+
+
+def _serialized_index_size_bytes(value: object) -> int:
+    """Return the UTF-8 size of a deterministic logical index payload."""
+
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
 
 
 class BaseRetriever(ABC):

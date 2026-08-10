@@ -117,7 +117,10 @@ def _finite_number(value: object, path: str) -> float:
 
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise EvaluationError(f"{path} must be a finite number")
-    result = float(value)
+    try:
+        result = float(value)
+    except OverflowError as exc:
+        raise EvaluationError(f"{path} must be a finite number") from exc
     if not math.isfinite(result):
         raise EvaluationError(f"{path} must be a finite number")
     return result

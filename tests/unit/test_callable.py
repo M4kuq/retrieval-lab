@@ -81,6 +81,7 @@ def test_retrieved_item_is_immutable_and_fully_validated() -> None:
         ({"id": "a", "parent_document_id": ""}, "parent_document_id"),
         ({"id": "a", "score": math.nan}, "score"),
         ({"id": "a", "score": math.inf}, "score"),
+        ({"id": "a", "score": 10**10000}, "score"),
         ({"id": "a", "rank": 0}, "rank"),
         ({"id": "a", "rank": True}, "rank"),
     ],
@@ -101,6 +102,8 @@ def test_callable_retriever_preserves_sequence_order_and_keyword_top_k() -> None
 
     retriever = CallableRetriever("production", search)
     assert retriever.name == "production"
+    with pytest.raises(TypeError, match="runtime_checkable"):
+        isinstance(retriever, Retriever)
     assert [item.id for item in retriever.retrieve("query", top_k=2)] == [
         "second",
         "first",
