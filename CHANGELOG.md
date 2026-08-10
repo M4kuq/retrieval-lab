@@ -23,6 +23,8 @@ Versioning once the first public release is published.
   validated default evaluation seed.
 - Immutable typed configuration models, strict schema-versioned YAML loading,
   and `EvaluationRunner.from_config()` with safe relative-path resolution.
+- Synchronous `CallableRetriever`, `RetrievedItem`, and corpus-free
+  `evaluate_retrievers()` support for existing search APIs and vector databases.
 
 ### Migration notes
 

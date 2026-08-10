@@ -23,6 +23,7 @@ The following names are importable from `retrieval_lab`:
 - `BM25Retriever`
 - `DenseRetriever`
 - `HybridRetriever`
+- `RetrievedItem`, `Retriever`, `CallableRetriever`, `evaluate_retrievers`
 - `EmbeddingBackend`
 - `EmbeddingModelMetadata`
 - `OptionalDependencyError`
@@ -83,6 +84,22 @@ normalizes document and query vectors unless `normalize_embeddings=False` is set
 It accepts a typed `EmbeddingBackend` for custom embedding services. The default
 sentence-transformers adapter is lazy; install it only when needed with
 `pip install retrieval-lab[dense]`.
+
+For an existing search API, use the synchronous callable contract:
+
+```python
+class Retriever(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]: ...
+```
+
+`CallableRetriever(name, callable)` validates immutable `RetrievedItem` records,
+including finite scores, optional contiguous ranks, duplicate IDs, and the
+requested cutoff. `evaluate_retrievers(dataset=..., retrievers=..., top_k=...)`
+evaluates these adapters without a corpus or index, using each returned
+sequence as its ranking and the shared metrics/latency/result schema.
 
 ## Runner contract
 

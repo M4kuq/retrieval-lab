@@ -91,6 +91,30 @@ result = evaluate_results(
 Every evaluation path reports HitRate, Recall, Precision, MRR, nDCG, and AP using
 the same shared metric engine and deterministic dataset hash.
 
+To evaluate a synchronous search callable directly, return `RetrievedItem`
+records in the provider's best-first order:
+
+```python
+from retrieval_lab import CallableRetriever, RetrievedItem, evaluate_retrievers
+
+search = CallableRetriever(
+    "production",
+    lambda query, *, top_k: [
+        RetrievedItem(id=row.chunk_id, parent_document_id=row.document_id)
+        for row in existing_search(query=query, limit=top_k)
+    ],
+)
+result = evaluate_retrievers(
+    dataset=dataset,
+    retrievers={"production": search},
+    top_k=[1, 3, 5],
+)
+```
+
+This adapter has no provider SDK dependency and requires no corpus or index.
+Each query is called once at `max(top_k)`; the returned sequence order is the
+ranking order.
+
 ## Dense retrieval
 
 Install the optional dependency when you want multilingual E5 dense retrieval:
