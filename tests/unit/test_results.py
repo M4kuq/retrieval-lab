@@ -1,8 +1,11 @@
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
+from retrieval_lab.artifacts import results as results_module
 from retrieval_lab.domain import (
     EvaluationResult,
     LatencyStats,
@@ -223,6 +226,96 @@ def test_save_json_wraps_low_level_write_errors(tmp_path: Path) -> None:
 
     with pytest.raises(EvaluationError, match="could not be saved"):
         _result().save_json(directory)
+
+
+def test_load_result_rejects_known_oversize_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "result.json"
+    path.write_text(_result().to_json(), encoding="utf-8")
+    original_open = results_module.os.open
+    original_read = results_module.os.read
+    read_sizes: list[int] = []
+
+    def recording_open(source: Path, flags: int) -> int:
+        assert source == path
+        return original_open(source, flags)
+
+    def recording_read(descriptor: int, size: int) -> bytes:
+        read_sizes.append(size)
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(results_module.os, "open", recording_open)
+    monkeypatch.setattr(results_module.os, "read", recording_read)
+    with pytest.raises(EvaluationError, match="max_bytes"):
+        EvaluationResult.load_json(path, max_bytes=1)
+
+    assert read_sizes == []
+
+
+def test_load_result_handles_short_reads_and_sysmax_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "result.json"
+    valid_result = EvaluationResult(
+        run_id="run-日本語",
+        metrics={
+            "keyword": RetrieverMetrics(
+                {
+                    1: {"recall": 0.0, "hit_rate": 0.0},
+                    2: {"recall": 1.0, "hit_rate": 1.0},
+                }
+            )
+        },
+        query_results={"keyword": [_query_evaluation()]},
+        manifest={"dataset": "日本語データ", "seed": 42},
+    )
+    path.write_text(valid_result.to_json(), encoding="utf-8")
+    original_read = results_module.os.read
+    calls = 0
+
+    def short_read(descriptor: int, size: int) -> bytes:
+        nonlocal calls
+        calls += 1
+        return original_read(descriptor, min(size, 1))
+
+    monkeypatch.setattr(results_module.os, "read", short_read)
+
+    assert (
+        EvaluationResult.load_json(path, max_bytes=sys.maxsize).run_id == "run-日本語"
+    )
+    assert calls > 100
+
+
+def test_load_result_detects_growth_after_fstat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "result.json"
+    path.write_text(_result().to_json(), encoding="utf-8")
+    original_fstat = results_module.os.fstat
+
+    def pretend_empty(descriptor: int) -> os.stat_result:
+        result = original_fstat(descriptor)
+        values = list(result)
+        values[6] = 0
+        return os.stat_result(values)
+
+    monkeypatch.setattr(results_module.os, "fstat", pretend_empty)
+    with pytest.raises(EvaluationError, match="max_bytes"):
+        EvaluationResult.load_json(path, max_bytes=1)
+
+
+def test_load_result_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("named pipes are unavailable")
+    path = tmp_path / "result.json"
+    try:
+        os.mkfifo(path)
+    except OSError:
+        pytest.skip("named pipes are unavailable")
+
+    with pytest.raises(EvaluationError, match="read result JSON"):
+        EvaluationResult.load_json(path)
 
 
 @pytest.mark.parametrize(

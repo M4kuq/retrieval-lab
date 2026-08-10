@@ -144,6 +144,10 @@ def run_benchmark(spec: BenchmarkSpec) -> dict[str, JSONValue]:
         raise EvaluationError("cold and warm benchmark run IDs differ")
     if cold["metrics"] != warm["metrics"]:
         raise EvaluationError("cold and warm benchmark metrics differ")
+    run_id_equal = cold["run_id"] == warm["run_id"]
+    metrics_equal = cold["metrics"] == warm["metrics"]
+    if not run_id_equal or not metrics_equal:
+        raise EvaluationError("benchmark equality invariants are false")
 
     finished_at = _utc_timestamp()
     duration_ms = (perf_counter_ns() - started_ns) / 1_000_000.0
@@ -162,8 +166,8 @@ def run_benchmark(spec: BenchmarkSpec) -> dict[str, JSONValue]:
             "repetitions": spec.repetitions,
         },
         "comparisons": {
-            "metrics_equal": True,
-            "run_id_equal": True,
+            "metrics_equal": metrics_equal,
+            "run_id_equal": run_id_equal,
         },
         "duration_ms": duration_ms,
         "environment": environment,
@@ -186,6 +190,7 @@ def save_benchmark(
 
     destination = _safe_output_path(output)
     _ensure_finite_json(payload)
+    _validate_report_shape(payload)
     try:
         encoded = (
             json.dumps(
@@ -383,10 +388,21 @@ def _safe_output_path(value: str | os.PathLike[str]) -> Path:
 def _has_symlink_component(path: Path) -> bool:
     current = path
     while current != current.parent:
-        if current.is_symlink():
+        if current.is_symlink() and not _is_trusted_system_alias(current):
             return True
         current = current.parent
-    return current.is_symlink()
+    return current.is_symlink() and not _is_trusted_system_alias(current)
+
+
+def _is_trusted_system_alias(path: Path) -> bool:
+    """Allow the macOS ``/var`` alias while rejecting user-created links."""
+
+    if path != Path("/var"):
+        return False
+    try:
+        return path.resolve(strict=True) == Path("/private/var")
+    except OSError:
+        return False
 
 
 def _ensure_finite_json(value: object) -> None:
@@ -433,31 +449,276 @@ def _validate_report_shape(value: Mapping[str, object]) -> None:
         "schema_version",
         "started_at_utc",
     }
-    if set(value) != required:
+    if not required.issubset(value):
         raise EvaluationError("benchmark report has an invalid schema")
     if value["schema_version"] != 1 or isinstance(value["schema_version"], bool):
         raise EvaluationError("benchmark report schema_version must be 1")
-    if not isinstance(value["benchmark"], Mapping):
-        raise EvaluationError("benchmark metadata must be an object")
-    if not isinstance(value["environment"], Mapping):
-        raise EvaluationError("benchmark environment must be an object")
+    _report_non_negative_number(value["duration_ms"], "benchmark duration_ms")
+    _report_string(value["started_at_utc"], "benchmark started_at_utc")
+    _report_string(value["finished_at_utc"], "benchmark finished_at_utc")
+
+    benchmark = _report_mapping(value["benchmark"], "benchmark metadata")
+    _report_fields(
+        benchmark,
+        {
+            "dataset_id",
+            "dataset_version",
+            "document_count",
+            "query_count",
+            "relevance_level",
+            "retrievers",
+            "seed",
+            "size",
+            "top_k",
+            "repetitions",
+        },
+        "benchmark metadata",
+    )
+    _report_string(benchmark["dataset_id"], "benchmark.dataset_id")
+    _report_string(benchmark["dataset_version"], "benchmark.dataset_version")
+    document_count = _report_positive_int(
+        benchmark["document_count"], "benchmark.document_count"
+    )
+    query_count = _report_positive_int(
+        benchmark["query_count"], "benchmark.query_count"
+    )
+    relevance_level = _report_string(
+        benchmark["relevance_level"], "benchmark.relevance_level"
+    )
+    if relevance_level not in {"document", "chunk"}:
+        raise EvaluationError("benchmark relevance_level is invalid")
+    retrievers = _report_string_list(benchmark["retrievers"], "benchmark.retrievers")
+    if not retrievers or len(set(retrievers)) != len(retrievers):
+        raise EvaluationError("benchmark retrievers must be unique and non-empty")
+    _report_non_negative_int(benchmark["seed"], "benchmark.seed")
+    size = _report_string(benchmark["size"], "benchmark.size")
+    if size not in {"small", "medium"}:
+        raise EvaluationError("benchmark size is invalid")
+    expected_counts = {"small": (24, 8), "medium": (160, 40)}
+    if (document_count, query_count) != expected_counts[size]:
+        raise EvaluationError("benchmark counts do not match its size tier")
+    if benchmark["dataset_id"] != "retrieval-lab.synthetic":
+        raise EvaluationError("benchmark dataset_id is invalid")
+    if benchmark["dataset_version"] != "1":
+        raise EvaluationError("benchmark dataset_version is invalid")
+    if relevance_level != "document":
+        raise EvaluationError("benchmark relevance_level must be 'document'")
+    if retrievers != ["keyword", "bm25"]:
+        raise EvaluationError("benchmark retrievers must be keyword and bm25")
+    top_k = _report_positive_int_list(benchmark["top_k"], "benchmark.top_k")
+    if not top_k or len(set(top_k)) != len(top_k) or top_k != sorted(top_k):
+        raise EvaluationError("benchmark top_k must be sorted and unique")
+    if benchmark["repetitions"] != 1 or isinstance(benchmark["repetitions"], bool):
+        raise EvaluationError("benchmark repetitions must be 1")
+
+    comparisons = _report_mapping(value["comparisons"], "benchmark comparisons")
+    _report_fields(
+        comparisons,
+        {"metrics_equal", "run_id_equal"},
+        "benchmark comparisons",
+    )
+    for field in ("metrics_equal", "run_id_equal"):
+        if not isinstance(comparisons[field], bool):
+            raise EvaluationError(f"benchmark comparisons.{field} must be boolean")
+
+    environment = _report_mapping(value["environment"], "benchmark environment")
+    _report_fields(
+        environment,
+        {"cpu", "os", "python", "retrieval_lab_version"},
+        "benchmark environment",
+    )
+    for field in ("cpu", "python", "retrieval_lab_version"):
+        _report_string(environment[field], f"benchmark environment.{field}")
+    environment_os = _report_mapping(environment["os"], "benchmark environment.os")
+    _report_fields(
+        environment_os,
+        {"machine", "release", "system"},
+        "benchmark environment.os",
+    )
+    for field in ("machine", "release", "system"):
+        _report_string(environment_os[field], f"benchmark environment.os.{field}")
+
     runs = value["runs"]
-    if not isinstance(runs, Mapping) or set(runs) != {"cold", "warm"}:
+    runs_mapping = _report_mapping(runs, "benchmark runs")
+    if not {"cold", "warm"}.issubset(runs_mapping):
         raise EvaluationError("benchmark runs must contain cold and warm")
     for phase in ("cold", "warm"):
-        item = runs[phase]
-        if not isinstance(item, Mapping):
-            raise EvaluationError(f"benchmark {phase} run must be an object")
-        for field in (
+        _validate_benchmark_run(
+            runs_mapping[phase],
+            phase,
+            retriever_names=set(retrievers),
+            top_k=top_k,
+        )
+    cold = _report_mapping(runs_mapping["cold"], "benchmark cold run")
+    warm = _report_mapping(runs_mapping["warm"], "benchmark warm run")
+    expected_run_id_equal = cold["run_id"] == warm["run_id"]
+    expected_metrics_equal = cold["metrics"] == warm["metrics"]
+    if not expected_run_id_equal or comparisons["run_id_equal"] is not True:
+        raise EvaluationError(
+            "benchmark comparisons.run_id_equal must be true for equal runs"
+        )
+    if not expected_metrics_equal or comparisons["metrics_equal"] is not True:
+        raise EvaluationError(
+            "benchmark comparisons.metrics_equal must be true for equal metrics"
+        )
+
+
+def _report_mapping(value: object, path: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise EvaluationError(f"{path} must be an object")
+    if any(not isinstance(key, str) for key in value):
+        raise EvaluationError(f"{path} keys must be strings")
+    return cast(Mapping[str, object], value)
+
+
+def _report_fields(value: Mapping[str, object], required: set[str], path: str) -> None:
+    if not required.issubset(value):
+        raise EvaluationError(f"{path} has invalid fields")
+
+
+def _report_string(value: object, path: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise EvaluationError(f"{path} must be a non-empty string")
+    return value
+
+
+def _report_non_negative_number(value: object, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EvaluationError(f"{path} must be a finite non-negative number")
+    try:
+        normalized = float(value)
+    except OverflowError as exc:
+        raise EvaluationError(f"{path} must be a finite non-negative number") from exc
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise EvaluationError(f"{path} must be a finite non-negative number")
+    return normalized
+
+
+def _report_non_negative_int(value: object, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise EvaluationError(f"{path} must be a non-negative integer")
+    return value
+
+
+def _report_positive_int(value: object, path: str) -> int:
+    normalized = _report_non_negative_int(value, path)
+    if normalized == 0:
+        raise EvaluationError(f"{path} must be a positive integer")
+    return normalized
+
+
+def _report_string_list(value: object, path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise EvaluationError(f"{path} must be a list of strings")
+    return [_report_string(item, f"{path}[]") for item in value]
+
+
+def _report_positive_int_list(value: object, path: str) -> list[int]:
+    if not isinstance(value, list):
+        raise EvaluationError(f"{path} must be a list of positive integers")
+    return [_report_positive_int(item, f"{path}[]") for item in value]
+
+
+def _report_number_mapping(value: object, path: str) -> Mapping[str, object]:
+    mapping = _report_mapping(value, path)
+    for key, number in mapping.items():
+        _report_non_negative_number(number, f"{path}.{key}")
+    return mapping
+
+
+def _validate_benchmark_run(
+    value: object,
+    phase: str,
+    *,
+    retriever_names: set[str],
+    top_k: list[int],
+) -> None:
+    path = f"benchmark {phase} run"
+    run = _report_mapping(value, path)
+    _report_fields(
+        run,
+        {
+            "build_ms",
             "cache",
-            "run_id",
-            "metrics",
-            "latency",
             "cache_events",
             "duration_ms",
-        ):
-            if field not in item:
-                raise EvaluationError(f"benchmark {phase} run is missing {field}")
+            "index_sizes_bytes",
+            "latency",
+            "metrics",
+            "run_id",
+        },
+        path,
+    )
+    cache = _report_string(run["cache"], f"{path}.cache")
+    if cache != phase:
+        raise EvaluationError(f"{path}.cache must be {phase!r}")
+    _report_string(run["run_id"], f"{path}.run_id")
+    _report_non_negative_number(run["duration_ms"], f"{path}.duration_ms")
+    build_ms = _report_number_mapping(run["build_ms"], f"{path}.build_ms")
+    if set(build_ms) != retriever_names:
+        raise EvaluationError(f"{path}.build_ms keys differ from benchmark retrievers")
+    index_sizes = _report_mapping(run["index_sizes_bytes"], f"{path}.index_sizes_bytes")
+    if set(index_sizes) != retriever_names:
+        raise EvaluationError(
+            f"{path}.index_sizes_bytes keys differ from benchmark retrievers"
+        )
+    for key, number in index_sizes.items():
+        _report_non_negative_int(number, f"{path}.index_sizes_bytes.{key}")
+    metrics = _report_mapping(run["metrics"], f"{path}.metrics")
+    if set(metrics) != retriever_names:
+        raise EvaluationError(f"{path}.metrics keys differ from benchmark retrievers")
+    expected_metric_keys = {
+        f"{metric}@{cutoff}"
+        for metric in ("ap", "hit_rate", "mrr", "ndcg", "precision", "recall")
+        for cutoff in top_k
+    }
+    for retriever, values in metrics.items():
+        metric_values = _report_number_mapping(values, f"{path}.metrics.{retriever}")
+        if set(metric_values) != expected_metric_keys:
+            raise EvaluationError(
+                f"{path}.metrics.{retriever} has non-canonical metric keys"
+            )
+        if any(float(value) > 1.0 for value in metric_values.values()):
+            raise EvaluationError(
+                f"{path}.metrics.{retriever} values must be between 0 and 1"
+            )
+    latency = _report_mapping(run["latency"], f"{path}.latency")
+    if set(latency) != retriever_names:
+        raise EvaluationError(f"{path}.latency keys differ from benchmark retrievers")
+    for retriever, stats_value in latency.items():
+        stats = _report_mapping(stats_value, f"{path}.latency.{retriever}")
+        _report_fields(
+            stats,
+            {
+                "failure_count",
+                "max_ms",
+                "mean_ms",
+                "p50_ms",
+                "p95_ms",
+                "sample_count",
+                "warnings",
+            },
+            f"{path}.latency.{retriever}",
+        )
+        for field in ("max_ms", "mean_ms", "p50_ms", "p95_ms"):
+            _report_non_negative_number(
+                stats[field], f"{path}.latency.{retriever}.{field}"
+            )
+        for field in ("failure_count", "sample_count"):
+            _report_non_negative_int(
+                stats[field], f"{path}.latency.{retriever}.{field}"
+            )
+        _report_string_list(stats["warnings"], f"{path}.latency.{retriever}.warnings")
+    events = run["cache_events"]
+    if not isinstance(events, list) or not events:
+        raise EvaluationError(f"{path}.cache_events must be a non-empty list")
+    for index, event_value in enumerate(events):
+        event_path = f"{path}.cache_events[{index}]"
+        event = _report_mapping(event_value, event_path)
+        _report_fields(event, {"artifact", "status", "duration_ms"}, event_path)
+        _report_string(event["artifact"], f"{event_path}.artifact")
+        _report_string(event["status"], f"{event_path}.status")
+        _report_non_negative_number(event["duration_ms"], f"{event_path}.duration_ms")
 
 
 __all__ = [

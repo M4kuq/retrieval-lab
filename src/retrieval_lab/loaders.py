@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import cast
 
@@ -15,11 +16,15 @@ from retrieval_lab.exceptions import CorpusValidationError
 _SUPPORTED_SUFFIXES = frozenset({".txt", ".md", ".markdown", ".jsonl"})
 
 
-def load_documents(path: str | Path) -> tuple[Document, ...]:
+def load_documents(
+    path: str | Path,
+    *,
+    include: Sequence[str] = (),
+) -> tuple[Document, ...]:
     """Load supported local documents in deterministic source-path order."""
 
     source = _coerce_path(path)
-    files, root = _discover_files(source)
+    files, root = _discover_files(source, include=include)
     documents: list[Document] = []
     identifier_locations: dict[str, str] = {}
 
@@ -62,7 +67,18 @@ def _coerce_path(path: str | Path) -> Path:
     return source
 
 
-def _discover_files(source: Path) -> tuple[tuple[Path, ...], Path]:
+def _discover_files(
+    source: Path,
+    *,
+    include: Sequence[str] = (),
+) -> tuple[tuple[Path, ...], Path]:
+    if isinstance(include, (str, bytes)) or not isinstance(include, Sequence):
+        raise CorpusValidationError("corpus include must be a sequence of glob strings")
+    patterns = tuple(include)
+    if any(not isinstance(pattern, str) or not pattern.strip() for pattern in patterns):
+        raise CorpusValidationError(
+            "corpus include must contain non-empty glob strings"
+        )
     try:
         if source.is_file():
             if source.suffix.lower() not in _SUPPORTED_SUFFIXES:
@@ -70,7 +86,17 @@ def _discover_files(source: Path) -> tuple[tuple[Path, ...], Path]:
                     f"unsupported corpus file type {source.suffix or '<none>'!r}: "
                     f"{source}; expected one of {sorted(_SUPPORTED_SUFFIXES)}"
                 )
-            return (source,), source.parent
+            relative = unicodedata.normalize("NFC", source.name)
+            selected = (
+                (source,)
+                if not patterns or _matches_include(relative, patterns)
+                else ()
+            )
+            if patterns and not selected:
+                raise CorpusValidationError(
+                    "corpus include matched no documents; adjust the configured globs"
+                )
+            return selected, source.parent
         if not source.is_dir():
             raise CorpusValidationError(
                 f"corpus path must be a regular file or directory: {source}"
@@ -87,18 +113,43 @@ def _discover_files(source: Path) -> tuple[tuple[Path, ...], Path]:
 
     files = tuple(
         sorted(
-            candidates,
+            (
+                item
+                for item in candidates
+                if not patterns
+                or _matches_include(
+                    unicodedata.normalize("NFC", item.relative_to(source).as_posix()),
+                    patterns,
+                )
+            ),
             key=lambda item: unicodedata.normalize(
                 "NFC", item.relative_to(source).as_posix()
             ),
         )
     )
     if not files:
+        if patterns and candidates:
+            raise CorpusValidationError(
+                "corpus include matched no documents; adjust the configured globs"
+            )
         raise CorpusValidationError(
             f"corpus directory has no supported files: {source}; expected "
             f"{sorted(_SUPPORTED_SUFFIXES)}"
         )
     return files, source
+
+
+def _matches_include(source: str, patterns: Sequence[str]) -> bool:
+    normalized_source = source.replace("\\", "/")
+    for raw_pattern in patterns:
+        pattern = raw_pattern.replace("\\", "/")
+        if fnmatchcase(normalized_source, pattern):
+            return True
+        if pattern.startswith("**/") and fnmatchcase(
+            normalized_source, pattern.removeprefix("**/")
+        ):
+            return True
+    return False
 
 
 def _relative_source(path: Path, root: Path) -> str:

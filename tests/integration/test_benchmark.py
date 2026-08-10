@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import sysconfig
+from copy import deepcopy
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
@@ -158,6 +159,101 @@ def test_benchmark_loader_rejects_overflowed_numbers(tmp_path: Path) -> None:
 
     with pytest.raises(EvaluationError, match="infinity"):
         load_benchmark(overflowed)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["benchmark"].__setitem__("top_k", "1,3,5"),
+        lambda payload: payload["comparisons"].__setitem__("metrics_equal", 1),
+        lambda payload: payload["environment"].__setitem__("os", []),
+        lambda payload: payload["runs"]["cold"].__setitem__("metrics", []),
+        lambda payload: payload["runs"]["cold"]["latency"]["keyword"].__setitem__(
+            "warnings", "warning"
+        ),
+        lambda payload: payload["runs"]["cold"]["cache_events"][0].__setitem__(
+            "duration_ms", "slow"
+        ),
+    ],
+)
+def test_benchmark_loader_rejects_malformed_nested_report_fields(
+    tmp_path: Path, mutate: object
+) -> None:
+    payload = deepcopy(run_benchmark(BenchmarkSpec()))
+    mutate(payload)  # type: ignore[operator]
+    output = tmp_path / "malformed.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(EvaluationError):
+        load_benchmark(output)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["runs"]["cold"].__setitem__("cache", "warm"),
+        lambda payload: payload["comparisons"].__setitem__("run_id_equal", False),
+        lambda payload: payload["comparisons"].__setitem__("metrics_equal", False),
+        lambda payload: payload["runs"]["cold"]["build_ms"].pop("keyword"),
+        lambda payload: payload["runs"]["cold"]["latency"].pop("keyword"),
+        lambda payload: payload["runs"]["cold"]["index_sizes_bytes"].pop("keyword"),
+        lambda payload: payload["runs"]["cold"]["metrics"]["keyword"].pop("recall@1"),
+        lambda payload: payload["benchmark"].__setitem__("document_count", 999),
+        lambda payload: payload["benchmark"].__setitem__("query_count", 999),
+        lambda payload: payload["benchmark"].__setitem__("relevance_level", "chunk"),
+        lambda payload: payload["benchmark"].__setitem__("dataset_id", "other"),
+        lambda payload: payload["benchmark"].__setitem__("dataset_version", "2"),
+        lambda payload: payload["benchmark"].__setitem__("retrievers", ["bm25"]),
+        lambda payload: (
+            payload["runs"]["cold"]["metrics"]["keyword"].__setitem__("recall@1", 42.0),
+            payload["runs"]["warm"]["metrics"]["keyword"].__setitem__("recall@1", 42.0),
+        ),
+    ],
+)
+def test_benchmark_saver_rejects_contradictory_producer_invariants(
+    tmp_path: Path, mutate: object
+) -> None:
+    payload = deepcopy(run_benchmark(BenchmarkSpec()))
+    mutate(payload)  # type: ignore[operator]
+
+    with pytest.raises(EvaluationError):
+        save_benchmark(payload, tmp_path / "contradictory.json")
+
+
+@pytest.mark.parametrize("field", ["run_id_equal", "metrics_equal"])
+def test_benchmark_loader_rejects_false_or_mismatched_equality(
+    tmp_path: Path, field: str
+) -> None:
+    payload = deepcopy(run_benchmark(BenchmarkSpec()))
+    if field == "run_id_equal":
+        payload["runs"]["warm"]["run_id"] = "different"
+    else:
+        payload["runs"]["warm"]["metrics"]["keyword"]["recall@1"] = 0.0
+    payload["comparisons"][field] = False
+    output = tmp_path / f"mismatch-{field}.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(EvaluationError):
+        load_benchmark(output)
+
+
+def test_benchmark_additive_fields_round_trip(tmp_path: Path) -> None:
+    payload = run_benchmark(BenchmarkSpec())
+    payload["extra_root"] = True
+    payload["benchmark"]["extra_benchmark"] = "kept"
+    payload["environment"]["extra_environment"] = 1
+    payload["environment"]["os"]["extra_os"] = "kept"
+    payload["runs"]["cold"]["extra_run"] = None
+    payload["runs"]["cold"]["latency"]["keyword"]["extra_latency"] = []
+    payload["runs"]["cold"]["cache_events"][0]["extra_event"] = False
+    output = tmp_path / "additive.json"
+
+    save_benchmark(payload, output)
+    loaded = load_benchmark(output)
+
+    assert loaded["extra_root"] is True
+    assert loaded["benchmark"]["extra_benchmark"] == "kept"
+    assert loaded["runs"]["cold"]["cache_events"][0]["extra_event"] is False
 
 
 def test_direct_benchmark_script_bootstraps_an_uninstalled_checkout(

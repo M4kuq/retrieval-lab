@@ -41,7 +41,16 @@ def _construct_mapping(
     mapping: dict[object, object] = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found unhashable key {key!r}",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
             raise yaml.constructor.ConstructorError(
                 "while constructing a mapping",
                 node.start_mark,
@@ -93,13 +102,13 @@ def load_config(path: str | Path) -> RetrievalConfig:
     config_path = config_path.resolve()
     try:
         text = config_path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         raise ConfigurationError(
             f"cannot read configuration {config_path}: {exc}"
         ) from exc
     try:
         raw = yaml.load(text, Loader=_StrictSafeLoader)
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, ValueError, OverflowError, RecursionError) as exc:
         raise ConfigurationError(f"invalid YAML in {config_path}: {exc}") from exc
 
     errors = _Errors()
@@ -236,14 +245,18 @@ def _number(
 ) -> float | None:
     if value is None:
         return default
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(float(value))
-    ):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         errors.add(path, "must be a finite number")
         return default
-    return float(value)
+    try:
+        normalized = float(value)
+    except OverflowError:
+        errors.add(path, "must be a finite number")
+        return default
+    if not math.isfinite(normalized):
+        errors.add(path, "must be a finite number")
+        return default
+    return normalized
 
 
 def _path(

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import stat
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -29,6 +30,13 @@ CHUNK_SCHEMA_VERSION = 1
 DENSE_INDEX_SCHEMA_VERSION = 1
 DENSE_IMPLEMENTATION_VERSION = "dense-index-v1"
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+CACHE_MAX_BYTES = 64 * 1024 * 1024
+_MAX_CACHE_BYTES = CACHE_MAX_BYTES
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+class CacheCapacityError(EvaluationError):
+    """Raised when a cache artifact exceeds the configured write capacity."""
 
 
 class CacheStatus(StrEnum):
@@ -60,7 +68,7 @@ def canonical_json_bytes(value: JSONValue) -> bytes:
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
-    except (TypeError, ValueError, OverflowError) as exc:
+    except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError) as exc:
         raise EvaluationError("cache artifact is not canonical JSON") from exc
 
 
@@ -135,11 +143,23 @@ def dense_index_path(
     )
 
 
-def _atomic_write(path: Path, payload: JSONValue) -> None:
+def _cache_max_bytes(value: int | None) -> int:
+    limit = _MAX_CACHE_BYTES if value is None else value
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise EvaluationError("cache max_bytes must be a positive integer")
+    return limit
+
+
+def _atomic_write(
+    path: Path,
+    payload: JSONValue,
+    *,
+    max_bytes: int | None = None,
+) -> None:
     """Write canonical bytes with fsync + same-directory replacement."""
 
+    limit = _cache_max_bytes(max_bytes)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = canonical_json_bytes(payload) + b"\n"
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -150,11 +170,28 @@ def _atomic_write(path: Path, payload: JSONValue) -> None:
             delete=False,
         ) as stream:
             temporary = Path(stream.name)
-            stream.write(data)
+            encoder = json.JSONEncoder(
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            written = 0
+            for fragment in encoder.iterencode(payload):
+                data = fragment.encode("utf-8")
+                written += len(data)
+                if written + 1 > limit:
+                    raise CacheCapacityError(
+                        f"cache artifact exceeds max_bytes ({limit})"
+                    )
+                stream.write(data)
+            stream.write(b"\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         temporary = None
+    except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError) as exc:
+        raise EvaluationError("cache artifact is not canonical JSON") from exc
     except OSError as exc:
         raise EvaluationError(
             f"could not atomically write cache artifact {path}"
@@ -169,13 +206,55 @@ def _atomic_write(path: Path, payload: JSONValue) -> None:
                 pass
 
 
-def _read_json(path: Path) -> CacheRead:
+class _CacheReadLimitError(ValueError):
+    pass
+
+
+def _read_bytes(path: Path, limit: int) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("cache artifact is not a regular file")
+        if metadata.st_size > limit:
+            raise _CacheReadLimitError(f"cache artifact exceeds max_bytes ({limit})")
+        data = bytearray()
+        while True:
+            request = min(_READ_CHUNK_BYTES, limit + 1 - len(data))
+            if request <= 0:
+                raise _CacheReadLimitError(
+                    f"cache artifact exceeds max_bytes ({limit})"
+                )
+            block = os.read(descriptor, request)
+            if not block:
+                return bytes(data)
+            data.extend(block)
+            if len(data) > limit:
+                raise _CacheReadLimitError(
+                    f"cache artifact exceeds max_bytes ({limit})"
+                )
+    finally:
+        os.close(descriptor)
+
+
+def _read_json(path: Path, *, max_bytes: int | None = None) -> CacheRead:
+    limit = _cache_max_bytes(max_bytes)
     if not path.exists():
         return CacheRead(CacheStatus.MISS, reason="artifact does not exist")
     try:
-        raw = path.read_bytes()
+        raw = _read_bytes(path, limit)
         value = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+    except _CacheReadLimitError as exc:
+        return CacheRead(CacheStatus.CORRUPT, reason=str(exc))
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        RecursionError,
+    ) as exc:
         return CacheRead(CacheStatus.CORRUPT, reason=f"invalid JSON: {exc}")
     if not isinstance(value, dict):
         return CacheRead(CacheStatus.CORRUPT, reason="artifact root must be an object")
@@ -183,27 +262,31 @@ def _read_json(path: Path) -> CacheRead:
 
 
 def _normalize_json(value: object, *, location: str) -> JSONValue:
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise EvaluationError(f"{location} must not contain NaN or infinity")
-        return value
-    if isinstance(value, Mapping):
-        result: dict[str, JSONValue] = {}
-        for key in sorted(value):
-            if not isinstance(key, str):
+    try:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise EvaluationError(f"{location} must not contain NaN or infinity")
+            return value
+        if isinstance(value, Mapping):
+            result: dict[str, JSONValue] = {}
+            keys = tuple(value)
+            if any(not isinstance(key, str) for key in keys):
                 raise EvaluationError(f"{location} keys must be strings")
-            result[key] = _normalize_json(value[key], location=f"{location}.{key}")
-        return result
-    if isinstance(value, (list, tuple)):
-        return [
-            _normalize_json(item, location=f"{location}[{index}]")
-            for index, item in enumerate(value)
-        ]
-    raise EvaluationError(
-        f"{location} contains unsupported JSON value type {type(value).__name__}"
-    )
+            for key in sorted(cast(tuple[str, ...], keys)):
+                result[key] = _normalize_json(value[key], location=f"{location}.{key}")
+            return result
+        if isinstance(value, (list, tuple)):
+            return [
+                _normalize_json(item, location=f"{location}[{index}]")
+                for index, item in enumerate(value)
+            ]
+        raise EvaluationError(
+            f"{location} contains unsupported JSON value type {type(value).__name__}"
+        )
+    except RecursionError as exc:
+        raise EvaluationError("cache JSON is cyclic or too deeply nested") from exc
 
 
 def _chunk_record(chunk: Chunk) -> dict[str, JSONValue]:
@@ -257,6 +340,8 @@ def write_chunk_artifact(
     cache_dir: str | os.PathLike[str],
     chunk_hash: str,
     chunks: Sequence[Chunk],
+    *,
+    max_bytes: int | None = None,
 ) -> Path:
     """Persist validated chunks as a schema-versioned JSON artifact."""
 
@@ -277,18 +362,20 @@ def write_chunk_artifact(
         "content_hash": _hash_json(records),
         "schema_version": CHUNK_SCHEMA_VERSION,
     }
-    _atomic_write(path, payload)
+    _atomic_write(path, payload, max_bytes=max_bytes)
     return path
 
 
 def read_chunk_artifact(
     cache_dir: str | os.PathLike[str],
     chunk_hash: str,
+    *,
+    max_bytes: int | None = None,
 ) -> CacheRead:
     """Read and fully validate a chunk artifact."""
 
     valid_hash = _validate_hash(chunk_hash, field_name="chunk_hash")
-    result = _read_json(chunk_path(cache_dir, valid_hash))
+    result = _read_json(chunk_path(cache_dir, valid_hash), max_bytes=max_bytes)
     if result.status is not CacheStatus.HIT:
         return result
     assert isinstance(result.payload, dict)
@@ -324,6 +411,7 @@ def write_dense_index_artifact(
     model_id: str,
     requested_revision: str | None,
     resolved_revision: str | None,
+    max_bytes: int | None = None,
 ) -> Path:
     """Persist a validated dense index without serializing executable data."""
 
@@ -377,7 +465,7 @@ def write_dense_index_artifact(
         ),
         "vectors": [list(row) for row in matrix],
     }
-    _atomic_write(path, payload)
+    _atomic_write(path, payload, max_bytes=max_bytes)
     return path
 
 
@@ -428,6 +516,7 @@ def read_dense_index_artifact(
     model_id: str,
     requested_revision: str | None,
     expected_resolved_revision: str | None = None,
+    max_bytes: int | None = None,
 ) -> CacheRead:
     """Read a dense index and validate identity, shape, IDs and all values."""
 
@@ -441,7 +530,7 @@ def read_dense_index_artifact(
         index_hash=valid_index_hash,
         retriever_identity=cast(Mapping[str, JSONValue], normalized_identity),
     )
-    result = _read_json(path)
+    result = _read_json(path, max_bytes=max_bytes)
     if result.status is not CacheStatus.HIT:
         return result
     assert isinstance(result.payload, dict)
@@ -547,10 +636,12 @@ def read_dense_index_artifact(
 
 
 __all__ = [
+    "CACHE_MAX_BYTES",
     "CHUNK_ARTIFACT_TYPE",
     "CHUNK_SCHEMA_VERSION",
     "DENSE_INDEX_ARTIFACT_TYPE",
     "DENSE_INDEX_SCHEMA_VERSION",
+    "CacheCapacityError",
     "CacheRead",
     "CacheStatus",
     "canonical_json_bytes",

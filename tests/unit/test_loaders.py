@@ -139,6 +139,29 @@ def test_load_rejects_non_utf8_with_line(tmp_path: Path) -> None:
         load_documents(source)
 
 
+def test_include_filters_files_before_reading_excluded_invalid_utf8(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "included.txt").write_text("valid", encoding="utf-8")
+    (tmp_path / "excluded.txt").write_bytes(b"invalid \xff UTF-8")
+
+    documents = load_documents(tmp_path, include=("included.txt",))
+
+    assert [document.source for document in documents] == ["included.txt"]
+
+
+def test_include_no_match_reports_actionable_error_for_file_and_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "single.txt"
+    source.write_text("valid", encoding="utf-8")
+    with pytest.raises(CorpusValidationError, match="include matched no documents"):
+        load_documents(source, include=("missing.txt",))
+
+    with pytest.raises(CorpusValidationError, match="include matched no documents"):
+        load_documents(tmp_path, include=("missing.txt",))
+
+
 def test_load_rejects_unsupported_single_file(tmp_path: Path) -> None:
     source = tmp_path / "manual.pdf"
     source.write_bytes(b"pdf")
