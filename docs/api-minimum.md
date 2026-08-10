@@ -31,6 +31,8 @@ The following names are importable from `retrieval_lab`:
 - `RelevanceLevel`
 - `RetrievedQueryResult`
 - `EvaluationRunner`
+- `RetrievalConfig` and its typed nested configuration records
+- `load_config`
 - `load_documents`
 - `validate_dataset`
 - `evaluate_results`
@@ -112,6 +114,20 @@ events and rebuilt. Cache state does not change the deterministic `run_id`.
 
 `EvaluationRunner(...).run()` uses the same application path as
 `quick_evaluate`; the classmethod is convenience syntax, not separate logic.
+
+`EvaluationRunner.from_config(path_or_config)` uses that same application path.
+YAML requires `schema_version: 1`, rejects duplicate and unknown fields, uses a
+safe loader, does not expand environment variables, and resolves relative paths
+from the configuration file's parent. The normalized configuration is recorded
+under `manifest["config"]` without absolute paths. Runtime paths and report-output
+choices do not change the deterministic run ID.
+
+The v0.1 YAML adapter supports the fixed character chunker exposed as
+`recursive_characters`, native evaluation JSONL, canonical built-in retriever
+names, RRF Hybrid references, and all six implemented metrics. `repetitions` and
+`concurrency` must both be `1` until the async execution API is available. Report
+and quality-gate blocks are strictly validated and retained for their dedicated
+execution APIs.
 
 ## File and precomputed-result contracts
 

@@ -20,7 +20,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Typing :: Typed",
 ]
-dependencies = []
+dependencies = ["pyyaml>=6,<7"]
 
 [project.optional-dependencies]
 dense = ["sentence-transformers>=5,<6"]
@@ -30,6 +30,7 @@ dev = [
   "pytest>=8.4,<9",
   "pytest-cov>=6,<8",
   "ruff>=0.12,<1",
+  "types-PyYAML>=6,<7",
 ]
 
 [tool.setuptools.packages.find]
