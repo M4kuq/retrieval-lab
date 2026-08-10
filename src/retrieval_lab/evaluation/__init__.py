@@ -31,13 +31,32 @@ def __getattr__(name: str) -> object:
         from retrieval_lab.retrievers.callable import evaluate_retrievers
 
         return evaluate_retrievers
+    if name in {
+        "AsyncRetriever",
+        "AsyncCallableRetriever",
+        "evaluate_async_retrievers",
+    }:
+        from retrieval_lab.retrievers.async_callable import (
+            AsyncCallableRetriever,
+            AsyncRetriever,
+            evaluate_async_retrievers,
+        )
+
+        return {
+            "AsyncCallableRetriever": AsyncCallableRetriever,
+            "AsyncRetriever": AsyncRetriever,
+            "evaluate_async_retrievers": evaluate_async_retrievers,
+        }[name]
     raise AttributeError(name)
 
 
 __all__ = [
+    "AsyncCallableRetriever",
+    "AsyncRetriever",
     "LatencyStats",
     "RetrievedQueryResult",
     "average_precision_at_k",
+    "evaluate_async_retrievers",
     "evaluate_results",
     "evaluate_retrievers",
     "hit_rate_at_k",

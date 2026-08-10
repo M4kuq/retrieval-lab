@@ -24,6 +24,7 @@ The following names are importable from `retrieval_lab`:
 - `DenseRetriever`
 - `HybridRetriever`
 - `RetrievedItem`, `Retriever`, `CallableRetriever`, `evaluate_retrievers`
+- `AsyncRetriever`, `AsyncCallableRetriever`, `evaluate_async_retrievers`
 - `EmbeddingBackend`
 - `EmbeddingModelMetadata`
 - `OptionalDependencyError`
@@ -101,6 +102,28 @@ requested cutoff. `evaluate_retrievers(dataset=..., retrievers=..., top_k=...)`
 evaluates these adapters without a corpus or index, using each returned
 sequence as its ranking and the shared metrics/latency/result schema.
 
+For an async provider, implement or wrap the separate protocol:
+
+```python
+class AsyncRetriever(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    async def retrieve(
+        self, query: str, *, top_k: int
+    ) -> Sequence[RetrievedItem]: ...
+```
+
+`AsyncCallableRetriever(name, callable)` and
+`await evaluate_async_retrievers(dataset=..., retrievers=..., top_k=...)` use
+the same item validation and result schema. `concurrency` bounds in-flight
+retrievals, `repetitions` checks deterministic rankings, and `timeout_s` is an
+optional per-call deadline. Results retain dataset query and sorted retriever
+order regardless of completion order. A failed query fails the whole run;
+caller `asyncio.CancelledError` is cleaned up and re-raised. This async entry
+point must be awaited from the caller's existing event loop; the synchronous
+entry point never starts an event loop or silently uses threads.
+
 ## Runner contract
 
 The first vertical slice supports:
@@ -141,9 +164,10 @@ choices do not change the deterministic run ID.
 
 The v0.1 YAML adapter supports the fixed character chunker exposed as
 `recursive_characters`, native evaluation JSONL, canonical built-in retriever
-names, RRF Hybrid references, and all six implemented metrics. `repetitions` and
-`concurrency` must both be `1` until the async execution API is available. Report
-and quality-gate blocks are strictly validated and retained for their dedicated
+names, RRF Hybrid references, and all six implemented metrics. The YAML runner
+remains the synchronous built-in-index entry point; async
+external retrieval uses the explicit callable API above. Report and
+quality-gate blocks are strictly validated and retained for their dedicated
 execution APIs.
 
 ## File and precomputed-result contracts
