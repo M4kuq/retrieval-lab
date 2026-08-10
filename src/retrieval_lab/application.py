@@ -7,14 +7,25 @@ and the result persistence API.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from retrieval_lab.artifacts.results import load_result
+from retrieval_lab.comparison import MetricDelta, RunComparison, compare_runs
 from retrieval_lab.config import RetrievalConfig, load_config
-from retrieval_lab.domain import EvaluationResult
-from retrieval_lab.exceptions import ConfigurationError, EvaluationError
+from retrieval_lab.domain import (
+    EvaluationResult,
+    JSONValue,
+    QualityGateReport,
+)
+from retrieval_lab.exceptions import (
+    ConfigurationError,
+    EvaluationError,
+)
+from retrieval_lab.quality import evaluate_quality_gates
 from retrieval_lab.runner import EvaluationRunner
 
 _SUPPORTED_FORMATS = frozenset({"json", "csv", "html"})
@@ -85,6 +96,184 @@ class ExperimentOutput:
     result: EvaluationResult
     formats: tuple[str, ...]
     paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class QueryEvidence:
+    """Safe, deterministic evidence for one retriever/query pair."""
+
+    retriever: str
+    query_id: str
+    retrieved_ids: tuple[str, ...]
+    metrics: tuple[tuple[str, float], ...]
+    search_latency_ms: float | None
+    warnings: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        """Return the machine-readable query evidence shape."""
+
+        return {
+            "metrics": {name: value for name, value in self.metrics},
+            "query_id": self.query_id,
+            "retrieved_ids": list(self.retrieved_ids),
+            "retriever": self.retriever,
+            "search_latency_ms": self.search_latency_ms,
+            "warnings": list(self.warnings),
+        }
+
+
+@dataclass(frozen=True)
+class InspectionOutput:
+    """Loaded result metadata and optional per-query evidence."""
+
+    result: EvaluationResult
+    query_id: str | None
+    evidence: tuple[QueryEvidence, ...]
+
+    @property
+    def gate_status(self) -> tuple[tuple[int, str, str, bool], ...]:
+        """Return gate index, retriever, metric, and pass state."""
+
+        return tuple(
+            (
+                gate.gate_index,
+                gate.retriever,
+                gate.metric,
+                gate.passed,
+            )
+            for gate in self.result.quality_gates
+        )
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        """Return deterministic machine-readable inspection data."""
+
+        payload: dict[str, JSONValue] = {
+            "command": "inspect",
+            "quality_gates": [
+                {
+                    "gate_index": index,
+                    "metric": metric,
+                    "passed": passed,
+                    "retriever": retriever,
+                }
+                for index, retriever, metric, passed in self.gate_status
+            ],
+            "run_id": self.result.run_id,
+            "schema_version": self.result.schema_version,
+            "retrievers": list(sorted(self.result.metrics)),
+            "summary": self.result.summary(),
+        }
+        if self.query_id is not None:
+            payload["query"] = {
+                "evidence": [item.to_dict() for item in self.evidence],
+                "query_id": self.query_id,
+            }
+        return payload
+
+    def to_json(self) -> str:
+        """Return deterministic strict JSON for automation."""
+
+        return _strict_json(self.to_dict())
+
+
+@dataclass(frozen=True)
+class ComparisonRow:
+    """One aggregate metric delta prepared for deterministic display."""
+
+    retriever: str
+    metric: str
+    cutoff: int | None
+    baseline: float
+    candidate: float
+    absolute_delta: float
+    relative_delta: float | None
+    relative_status: str
+    direction: str
+    classification: str
+
+    @classmethod
+    def from_delta(cls, delta: MetricDelta) -> ComparisonRow:
+        """Build a display row from the comparison domain record."""
+
+        return cls(
+            retriever=delta.retriever,
+            metric=delta.metric,
+            cutoff=delta.cutoff,
+            baseline=delta.baseline,
+            candidate=delta.candidate,
+            absolute_delta=delta.absolute_delta,
+            relative_delta=delta.relative_delta,
+            relative_status=delta.relative_status,
+            direction=delta.direction,
+            classification=delta.classification,
+        )
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        """Return the machine-readable comparison row shape."""
+
+        return {
+            "absolute_delta": self.absolute_delta,
+            "baseline": self.baseline,
+            "candidate": self.candidate,
+            "classification": self.classification,
+            "cutoff": self.cutoff,
+            "direction": self.direction,
+            "metric": self.metric,
+            "relative_delta": self.relative_delta,
+            "relative_status": self.relative_status,
+            "retriever": self.retriever,
+        }
+
+
+@dataclass(frozen=True)
+class ComparisonOutput:
+    """Comparable saved runs and deterministic aggregate metric rows."""
+
+    comparison: RunComparison
+    rows: tuple[ComparisonRow, ...]
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        """Return deterministic machine-readable comparison data."""
+
+        report = self.comparison.comparability
+        return {
+            "baseline_run_id": self.comparison.baseline_run_id,
+            "candidate_run_id": self.comparison.candidate_run_id,
+            "command": "compare",
+            "common_retrievers": list(report.common_retrievers),
+            "diagnostics": [
+                {
+                    "candidate_value": item.candidate_value,
+                    "field": item.field,
+                    "reason": item.reason,
+                    "baseline_value": item.baseline_value,
+                }
+                for item in report.diagnostics
+            ],
+            "metrics": [row.to_dict() for row in self.rows],
+        }
+
+    def to_json(self) -> str:
+        """Return deterministic strict JSON for automation."""
+
+        return _strict_json(self.to_dict())
+
+
+@dataclass(frozen=True)
+class GateOutput:
+    """Configured quality-gate evaluation and its pass/fail state."""
+
+    report: QualityGateReport
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        """Return deterministic machine-readable gate data."""
+
+        return {"command": "gate", **self.report.to_dict()}
+
+    def to_json(self) -> str:
+        """Return deterministic strict JSON for automation."""
+
+        return _strict_json(self.to_dict())
 
 
 def initialize_project(
@@ -201,6 +390,117 @@ def run_configured_experiment(
     )
 
 
+def inspect_result(
+    result_path: str | os.PathLike[str],
+    *,
+    query_id: str | None = None,
+    max_bytes: int = 64 * 1024 * 1024,
+) -> InspectionOutput:
+    """Load a saved result and prepare deterministic inspection data."""
+
+    result = load_result(
+        _checked_input_file(result_path, "result path"), max_bytes=max_bytes
+    )
+    if query_id is None:
+        evidence: tuple[QueryEvidence, ...] = ()
+    else:
+        if not isinstance(query_id, str) or not query_id.strip():
+            raise ConfigurationError("query_id must be a non-empty string")
+        rows: list[QueryEvidence] = []
+        for retriever in sorted(result.query_results):
+            matching = tuple(
+                query
+                for query in result.query_results[retriever]
+                if query.query_id == query_id
+            )
+            if not matching:
+                continue
+            query = matching[0]
+            metrics = tuple(
+                (
+                    f"{metric}@{cutoff}",
+                    value,
+                )
+                for cutoff in sorted(query.metrics_by_cutoff)
+                for metric, value in sorted(query.metrics_by_cutoff[cutoff].items())
+            )
+            rows.append(
+                QueryEvidence(
+                    retriever=retriever,
+                    query_id=query.query_id,
+                    retrieved_ids=query.retrieved_ids,
+                    metrics=metrics,
+                    search_latency_ms=query.search_latency_ms,
+                    warnings=query.warnings,
+                )
+            )
+        if not rows:
+            raise ConfigurationError(f"unknown query_id {query_id!r}")
+        evidence = tuple(rows)
+    return InspectionOutput(result=result, query_id=query_id, evidence=evidence)
+
+
+def compare_result_files(
+    baseline_path: str | os.PathLike[str],
+    candidate_path: str | os.PathLike[str],
+    *,
+    max_bytes: int = 64 * 1024 * 1024,
+) -> ComparisonOutput:
+    """Load and compare two saved results through the strict public APIs."""
+
+    baseline = load_result(
+        _checked_input_file(baseline_path, "baseline result path"),
+        max_bytes=max_bytes,
+    )
+    candidate = load_result(
+        _checked_input_file(candidate_path, "candidate result path"),
+        max_bytes=max_bytes,
+    )
+    comparison = compare_runs(baseline, candidate)
+    rows = tuple(
+        ComparisonRow.from_delta(item.aggregate)
+        for retriever in sorted(comparison.metrics)
+        for item in sorted(
+            comparison.metrics[retriever],
+            key=lambda value: (
+                value.metric,
+                -1 if value.cutoff is None else value.cutoff,
+            ),
+        )
+    )
+    return ComparisonOutput(comparison=comparison, rows=rows)
+
+
+def evaluate_configured_quality_gates(
+    config_path: str | os.PathLike[str],
+    candidate_path: str | os.PathLike[str],
+    *,
+    baseline_path: str | os.PathLike[str] | None = None,
+    max_bytes: int = 64 * 1024 * 1024,
+) -> GateOutput:
+    """Load config/results and evaluate its typed quality gates."""
+
+    config = load_config(_checked_input_file(config_path, "config path"))
+    candidate = load_result(
+        _checked_input_file(candidate_path, "candidate result path"),
+        max_bytes=max_bytes,
+    )
+    baseline = (
+        None
+        if baseline_path is None
+        else load_result(
+            _checked_input_file(baseline_path, "baseline result path"),
+            max_bytes=max_bytes,
+        )
+    )
+    report = evaluate_quality_gates(
+        candidate,
+        config.quality_gates,
+        baseline=baseline,
+    )
+    return GateOutput(report=report)
+
+
 def _path_from_input(value: str | os.PathLike[str] | None, field: str) -> Path:
     if value is None:
         raise ConfigurationError(f"{field} must be provided")
@@ -213,6 +513,36 @@ def _path_from_input(value: str | os.PathLike[str] | None, field: str) -> Path:
     if not str(path):
         raise ConfigurationError(f"{field} must not be empty")
     return path
+
+
+def _checked_input_file(value: str | os.PathLike[str], field: str) -> Path:
+    path = _path_from_input(value, field)
+    absolute = path.absolute()
+    _reject_symlink_components(absolute, stop=absolute)
+    try:
+        if not path.exists() or not path.is_file():
+            raise ConfigurationError(f"{field} must be an existing file")
+    except ConfigurationError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise ConfigurationError(f"{field} is not accessible") from exc
+    return path
+
+
+def _strict_json(value: dict[str, JSONValue]) -> str:
+    try:
+        return (
+            json.dumps(
+                value,
+                allow_nan=False,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    except (TypeError, ValueError) as exc:
+        raise EvaluationError("application output could not be serialized") from exc
 
 
 def _validation_result(
@@ -285,10 +615,18 @@ def _normalize_formats(values: Sequence[str]) -> tuple[str, ...]:
 
 
 __all__ = [
+    "ComparisonOutput",
+    "ComparisonRow",
     "ExperimentOutput",
+    "GateOutput",
     "InitializedProject",
+    "InspectionOutput",
+    "QueryEvidence",
     "ValidationResult",
+    "compare_result_files",
+    "evaluate_configured_quality_gates",
     "initialize_project",
+    "inspect_result",
     "run_configured_experiment",
     "validate_config_inputs",
 ]

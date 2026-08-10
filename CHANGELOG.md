@@ -36,6 +36,8 @@ Versioning once the first public release is published.
   result attachment and validated JSON round-tripping.
 - Thin standard-library CLI and typed application services for safe project
   initialization, input validation, configured runs, and report persistence.
+- Added thin `inspect`, `compare`, and `gate` CLI commands with deterministic
+  text/strict JSON output, query evidence inspection, and stable exit codes.
 
 ### Migration notes
 

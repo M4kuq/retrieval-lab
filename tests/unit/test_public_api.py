@@ -1,5 +1,7 @@
 from retrieval_lab import (
     BM25Retriever,
+    ComparisonOutput,
+    ComparisonRow,
     DenseRetriever,
     Document,
     EmbeddingBackend,
@@ -7,14 +9,20 @@ from retrieval_lab import (
     EvaluationDataset,
     EvaluationRunner,
     ExperimentOutput,
+    GateOutput,
     HybridRetriever,
     InitializedProject,
+    InspectionOutput,
     OptionalDependencyError,
+    QueryEvidence,
     RetrievalLabError,
     RetrievedQueryResult,
     ValidationResult,
+    compare_result_files,
+    evaluate_configured_quality_gates,
     evaluate_results,
     initialize_project,
+    inspect_result,
     load_documents,
     run_configured_experiment,
     validate_config_inputs,
@@ -51,3 +59,11 @@ def test_application_services_are_available_from_the_package_root() -> None:
     assert initialize_project.__module__ == "retrieval_lab.application"
     assert validate_config_inputs.__module__ == "retrieval_lab.application"
     assert run_configured_experiment.__module__ == "retrieval_lab.application"
+    assert QueryEvidence.__module__ == "retrieval_lab.application"
+    assert InspectionOutput.__module__ == "retrieval_lab.application"
+    assert ComparisonRow.__module__ == "retrieval_lab.application"
+    assert ComparisonOutput.__module__ == "retrieval_lab.application"
+    assert GateOutput.__module__ == "retrieval_lab.application"
+    assert inspect_result.__module__ == "retrieval_lab.application"
+    assert compare_result_files.__module__ == "retrieval_lab.application"
+    assert evaluate_configured_quality_gates.__module__ == "retrieval_lab.application"
