@@ -432,6 +432,27 @@ def test_typed_config_models_reject_unsupported_values(
             ),
             "finite",
         ),
+        (
+            lambda: QualityGateConfig(
+                retriever="keyword", metric="recall@1", max_absolute_drop=-0.1
+            ),
+            "non-negative",
+        ),
+        (
+            lambda: QualityGateConfig(
+                retriever="keyword",
+                metric="recall@1",
+                min_value=0.8,
+                max_value=0.2,
+            ),
+            "exceed",
+        ),
+        (
+            lambda: QualityGateConfig(
+                retriever="keyword", metric="unsupported@1", min_value=0.5
+            ),
+            "supported",
+        ),
         (lambda: ReportConfig(output_dir="reports"), "output_dir"),  # type: ignore[arg-type]
         (lambda: ReportConfig(formats="json"), "formats"),  # type: ignore[arg-type]
         (lambda: ReportConfig(formats=("json", "json")), "duplicates"),
@@ -474,6 +495,34 @@ def test_yaml_loader_validation_branches(
     path.write_text(original.replace(old, new), encoding="utf-8")
 
     with pytest.raises(ConfigurationError, match=expected):
+        load_config(path)
+
+
+def test_quality_gate_drop_fields_are_normalized_and_unknown_fields_rejected(
+    tmp_path: Path,
+) -> None:
+    path = _write_fixture(tmp_path)
+    text = path.read_text(encoding="utf-8").replace(
+        "    min_value: 0.5\n",
+        "    min_value: 0.5\n    max_absolute_drop: 0.1\n    max_relative_drop: 0.2\n",
+    )
+    path.write_text(text, encoding="utf-8")
+    config = load_config(path)
+    gate = config.quality_gates[0]
+    assert gate.max_absolute_drop == 0.1
+    assert gate.max_relative_drop == 0.2
+    assert config.normalized_settings()["quality_gates"][0] == {
+        "max_absolute_drop": 0.1,
+        "max_relative_drop": 0.2,
+        "max_value": None,
+        "metric": "recall@1",
+        "min_value": 0.5,
+        "retriever": "keyword",
+    }
+    path.write_text(
+        text.replace("max_relative_drop: 0.2", "typo: 0.2"), encoding="utf-8"
+    )
+    with pytest.raises(ConfigurationError, match=r"quality_gates\[0\]\.typo"):
         load_config(path)
 
 

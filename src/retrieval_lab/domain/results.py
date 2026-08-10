@@ -20,6 +20,7 @@ from ._validation import (
     require_non_empty_string,
     require_positive_int,
 )
+from .gates import QualityGateReport, QualityGateResult
 from .json_types import JSONValue
 
 
@@ -205,6 +206,7 @@ class EvaluationResult:
     manifest: Mapping[str, JSONValue]
     schema_version: int
     latency: Mapping[str, LatencyStats]
+    quality_gates: tuple[QualityGateResult, ...]
 
     def __init__(
         self,
@@ -215,6 +217,7 @@ class EvaluationResult:
         schema_version: int = 1,
         latency: Mapping[str, LatencyStats] | None = None,
         latency_stats: Mapping[str, LatencyStats] | None = None,
+        quality_gates: Sequence[QualityGateResult] | None = None,
     ) -> None:
         """Create a result after validating retriever and schema consistency."""
 
@@ -243,6 +246,12 @@ class EvaluationResult:
             latency if latency is not None else latency_stats,
             retriever_names=normalized_metrics.keys(),
         )
+        normalized_quality_gates = _normalize_quality_gates(
+            quality_gates,
+            candidate_run_id=normalized_run_id,
+            metrics=normalized_metrics,
+            latency=normalized_latency,
+        )
 
         object.__setattr__(self, "run_id", normalized_run_id)
         object.__setattr__(self, "metrics", normalized_metrics)
@@ -250,6 +259,35 @@ class EvaluationResult:
         object.__setattr__(self, "manifest", normalized_manifest)
         object.__setattr__(self, "schema_version", schema_version)
         object.__setattr__(self, "latency", normalized_latency)
+        object.__setattr__(self, "quality_gates", normalized_quality_gates)
+
+    def with_quality_gates(
+        self,
+        report_or_results: QualityGateReport | Sequence[QualityGateResult],
+    ) -> EvaluationResult:
+        """Return an immutable copy carrying typed quality-gate results."""
+
+        if isinstance(report_or_results, QualityGateReport):
+            results = report_or_results.results
+            if report_or_results.candidate_run_id != self.run_id:
+                raise EvaluationError("quality gate report candidate run ID differs")
+        elif isinstance(report_or_results, Sequence) and not isinstance(
+            report_or_results, (str, bytes)
+        ):
+            results = tuple(report_or_results)
+        else:
+            raise EvaluationError(
+                "quality gates must be a QualityGateReport or a sequence of results"
+            )
+        return EvaluationResult(
+            run_id=self.run_id,
+            metrics=self.metrics,
+            query_results=self.query_results,
+            manifest=self.manifest,
+            schema_version=self.schema_version,
+            latency=self.latency if self.latency else None,
+            quality_gates=results,
+        )
 
     @property
     def latency_stats(self) -> Mapping[str, LatencyStats]:
@@ -281,7 +319,7 @@ class EvaluationResult:
                 ],
             }
         return {
-            "quality_gates": [],
+            "quality_gates": [gate.to_dict() for gate in self.quality_gates],
             "retrievers": retrievers,
             "run": {
                 "id": self.run_id,
@@ -455,6 +493,96 @@ def _normalize_latency(
             "EvaluationResult latency and metrics must contain the same retriever names"
         )
     return MappingProxyType(dict(sorted(normalized.items())))
+
+
+def _normalize_quality_gates(
+    values: Sequence[QualityGateResult] | None,
+    *,
+    candidate_run_id: str,
+    metrics: Mapping[str, RetrieverMetrics],
+    latency: Mapping[str, LatencyStats],
+) -> tuple[QualityGateResult, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise EvaluationError("EvaluationResult.quality_gates must be a sequence")
+    normalized = tuple(values)
+    if not all(isinstance(value, QualityGateResult) for value in normalized):
+        raise EvaluationError(
+            "EvaluationResult.quality_gates must contain QualityGateResult"
+        )
+    if any(value.candidate_run_id != candidate_run_id for value in normalized):
+        raise EvaluationError("EvaluationResult.quality_gates candidate run ID differs")
+    if len({value.gate_index for value in normalized}) != len(normalized):
+        raise EvaluationError(
+            "EvaluationResult.quality_gates must not contain duplicate gate indexes"
+        )
+    ordered = tuple(sorted(normalized, key=lambda value: value.gate_index))
+    if tuple(value.gate_index for value in ordered) != tuple(range(len(ordered))):
+        raise EvaluationError(
+            "EvaluationResult.quality_gates indexes must be contiguous from zero"
+        )
+    for gate in ordered:
+        candidate_value = _quality_gate_metric_value(
+            gate.retriever,
+            gate.metric,
+            metrics=metrics,
+            latency=latency,
+        )
+        for check in gate.checks:
+            if check.constraint in ("min_value", "max_value") and (
+                check.actual is None or check.actual != candidate_value
+            ):
+                raise EvaluationError(
+                    "EvaluationResult quality gate candidate value differs"
+                )
+    return ordered
+
+
+def _quality_gate_metric_value(
+    retriever: str,
+    metric_reference: str,
+    *,
+    metrics: Mapping[str, RetrieverMetrics],
+    latency: Mapping[str, LatencyStats],
+) -> float:
+    if retriever not in metrics:
+        raise EvaluationError(
+            "EvaluationResult quality gate references an unavailable retriever"
+        )
+    latency_fields = {
+        "latency_mean_ms": "mean_ms",
+        "latency_p50_ms": "p50_ms",
+        "latency_p95_ms": "p95_ms",
+        "latency_max_ms": "max_ms",
+    }
+    if metric_reference in latency_fields:
+        if retriever not in latency:
+            raise EvaluationError(
+                "EvaluationResult quality gate references unavailable latency"
+            )
+        return float(getattr(latency[retriever], latency_fields[metric_reference]))
+    if metric_reference.count("@") != 1:
+        raise EvaluationError("EvaluationResult quality gate metric is invalid")
+    metric, raw_cutoff = metric_reference.split("@")
+    if not metric or not raw_cutoff.isdecimal():
+        raise EvaluationError("EvaluationResult quality gate metric is invalid")
+    try:
+        cutoff = int(raw_cutoff)
+    except ValueError as exc:
+        raise EvaluationError(
+            "EvaluationResult quality gate metric is invalid"
+        ) from exc
+    if raw_cutoff != str(cutoff):
+        raise EvaluationError("EvaluationResult quality gate metric is invalid")
+    if cutoff <= 0:
+        raise EvaluationError("EvaluationResult quality gate metric is invalid")
+    values = metrics[retriever].metrics_by_cutoff.get(cutoff)
+    if values is None or metric not in values:
+        raise EvaluationError(
+            "EvaluationResult quality gate references an unavailable metric"
+        )
+    return values[metric]
 
 
 def _normalize_query_results(

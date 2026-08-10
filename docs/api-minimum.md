@@ -39,6 +39,8 @@ The following names are importable from `retrieval_lab`:
 - `ComparisonTolerance`, `ComparabilityIssue`, `ComparabilityReport`
 - `MetricDelta`, `QueryDeltaExtreme`, `MetricComparison`, `RunComparison`
 - `check_comparability`, `compare_runs`
+- `QualityGateConfig`, `QualityGateCheck`, `QualityGateResult`, `QualityGateReport`
+- `evaluate_quality_gates`
 - `load_documents`
 - `validate_dataset`
 - `evaluate_results`
@@ -211,9 +213,20 @@ Results can be loaded through `EvaluationResult.from_dict(payload)`,
 `EvaluationResult.from_json(text)`, `EvaluationResult.load_json(path)`, or the
 package-root alias `load_result(path)`. JSON loading accepts schema version 1,
 rejects duplicate keys, non-finite numbers, malformed metrics, inconsistent
-aggregates, and partial latency data. Unknown additive fields are ignored; the
-non-empty `quality_gates` result form is not loadable until its typed execution
-API exists. `load_json` defaults to a 64 MiB file limit.
+aggregates, and partial latency data. Unknown additive fields are ignored;
+typed non-empty `quality_gates` results are validated and restored as immutable
+records. `load_json` defaults to a 64 MiB file limit.
+
+`evaluate_quality_gates(candidate, gates, baseline=...)` evaluates every
+configured constraint in order. `min_value` and `max_value` apply to the
+candidate value. `max_absolute_drop` and `max_relative_drop` require a baseline
+and use the saved-run comparison direction, with lower latency treated as an
+improvement. `QualityGateReport.passed`, `.failed`, `.to_dict()`, and `.to_json()`
+provide library-level results without printing. Attach results immutably with
+`EvaluationResult.with_quality_gates(report)`; the canonical root
+`quality_gates` list round-trips through the existing result loader.
+An empty gate sequence produces an empty passing report and preserves the
+existing empty `quality_gates` result shape.
 
 Saved runs can be compared without re-running retrieval:
 

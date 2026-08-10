@@ -32,6 +32,8 @@ Versioning once the first public release is published.
   standalone dependency-free reports with formula and HTML injection protection.
 - Deterministic typed comparison of saved runs with complete comparability
   diagnostics and aggregate/query-level metric deltas.
+- Typed absolute and baseline-relative quality-gate evaluation with immutable
+  result attachment and validated JSON round-tripping.
 
 ### Migration notes
 

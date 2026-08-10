@@ -8,14 +8,19 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
+from retrieval_lab.domain import ConstraintType, QualityGateCheck, QualityGateResult
 from retrieval_lab.domain.json_types import JSONValue
 from retrieval_lab.evaluation.latency import LatencyStats
 from retrieval_lab.exceptions import EvaluationError
 
 if TYPE_CHECKING:
-    from retrieval_lab.domain import EvaluationResult, QueryEvaluation, RetrieverMetrics
+    from retrieval_lab.domain import (
+        EvaluationResult,
+        QueryEvaluation,
+        RetrieverMetrics,
+    )
 
 
 _MAX_RESULT_BYTES = 64 * 1024 * 1024
@@ -23,6 +28,25 @@ _REQUIRED_ROOT = {"schema_version", "run", "retrievers", "quality_gates"}
 _REQUIRED_RUN = {"id", "manifest"}
 _REQUIRED_RETRIEVER = {"metrics", "per_query"}
 _REQUIRED_QUERY = {"query_id", "retrieved_ids", "metrics"}
+_REQUIRED_GATE = {
+    "gate_index",
+    "retriever",
+    "metric",
+    "checks",
+    "passed",
+    "candidate_run_id",
+    "baseline_run_id",
+}
+_REQUIRED_GATE_CHECK = {
+    "constraint",
+    "actual",
+    "threshold",
+    "passed",
+    "reason",
+    "absolute_tolerance",
+    "relative_tolerance",
+    "status",
+}
 _REQUIRED_LATENCY = {
     "mean_ms",
     "p50_ms",
@@ -161,6 +185,127 @@ def _positive_or_zero_int(value: object, path: str) -> int:
     return value
 
 
+def _optional_string(value: object, path: str) -> str | None:
+    if value is None:
+        return None
+    return _string(value, path)
+
+
+def _boolean(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise EvaluationError(f"{path} must be boolean")
+    return value
+
+
+def _parse_quality_gates(
+    value: object,
+    path: str,
+    *,
+    candidate_run_id: str,
+) -> tuple[QualityGateResult, ...]:
+    if not isinstance(value, list):
+        raise EvaluationError(f"{path} must be a list")
+    results: list[QualityGateResult] = []
+    identities: set[int] = set()
+    for index, raw_gate in enumerate(value):
+        gate_path = f"{path}[{index}]"
+        gate = _required_mapping(raw_gate, gate_path, _REQUIRED_GATE)
+        retriever = _string(gate["retriever"], f"{gate_path}.retriever")
+        metric = _string(gate["metric"], f"{gate_path}.metric")
+        gate_index = _positive_or_zero_int(
+            gate["gate_index"], f"{gate_path}.gate_index"
+        )
+        baseline_run_id = _optional_string(
+            gate["baseline_run_id"], f"{gate_path}.baseline_run_id"
+        )
+        stored_candidate = _string(
+            gate["candidate_run_id"], f"{gate_path}.candidate_run_id"
+        )
+        if stored_candidate != candidate_run_id:
+            raise EvaluationError(
+                f"{gate_path}.candidate_run_id does not match result run"
+            )
+        raw_checks = gate["checks"]
+        if not isinstance(raw_checks, list) or not raw_checks:
+            raise EvaluationError(f"{gate_path}.checks must be a non-empty list")
+        checks: list[QualityGateCheck] = []
+        for check_index, raw_check in enumerate(raw_checks):
+            check_path = f"{gate_path}.checks[{check_index}]"
+            check = _required_mapping(raw_check, check_path, _REQUIRED_GATE_CHECK)
+            constraint = _string(check["constraint"], f"{check_path}.constraint")
+            actual_value = check["actual"]
+            actual = (
+                None
+                if actual_value is None
+                else _finite_number(actual_value, f"{check_path}.actual")
+            )
+            threshold = _finite_number(check["threshold"], f"{check_path}.threshold")
+            passed = _boolean(check["passed"], f"{check_path}.passed")
+            reason = _string(check["reason"], f"{check_path}.reason")
+            absolute_tolerance = _finite_number(
+                check["absolute_tolerance"], f"{check_path}.absolute_tolerance"
+            )
+            relative_tolerance = _finite_number(
+                check["relative_tolerance"], f"{check_path}.relative_tolerance"
+            )
+            status = _string(check["status"], f"{check_path}.status")
+            check_retriever = _optional_string(
+                check.get("retriever"), f"{check_path}.retriever"
+            )
+            check_metric = _optional_string(check.get("metric"), f"{check_path}.metric")
+            check_candidate = _optional_string(
+                check.get("candidate_run_id"), f"{check_path}.candidate_run_id"
+            )
+            check_baseline = _optional_string(
+                check.get("baseline_run_id"), f"{check_path}.baseline_run_id"
+            )
+            if check_retriever is not None and check_retriever != retriever:
+                raise EvaluationError(f"{check_path}.retriever does not match gate")
+            if check_metric is not None and check_metric != metric:
+                raise EvaluationError(f"{check_path}.metric does not match gate")
+            if check_candidate is not None and check_candidate != stored_candidate:
+                raise EvaluationError(
+                    f"{check_path}.candidate_run_id does not match gate"
+                )
+            if check_baseline is not None and check_baseline != baseline_run_id:
+                raise EvaluationError(
+                    f"{check_path}.baseline_run_id does not match gate"
+                )
+            checks.append(
+                QualityGateCheck(
+                    retriever=retriever,
+                    metric=metric,
+                    constraint=cast(ConstraintType, constraint),
+                    actual=actual,
+                    threshold=threshold,
+                    passed=passed,
+                    reason=reason,
+                    candidate_run_id=stored_candidate,
+                    baseline_run_id=baseline_run_id,
+                    absolute_tolerance=absolute_tolerance,
+                    relative_tolerance=relative_tolerance,
+                    status=cast(
+                        Literal["defined", "undefined_baseline_zero_regression"],
+                        status,
+                    ),
+                )
+            )
+        result = QualityGateResult(
+            retriever=retriever,
+            metric=metric,
+            checks=tuple(checks),
+            passed=_boolean(gate["passed"], f"{gate_path}.passed"),
+            candidate_run_id=stored_candidate,
+            baseline_run_id=baseline_run_id,
+            gate_index=gate_index,
+        )
+        if gate_index in identities:
+            raise EvaluationError(f"{path} contains duplicate gate")
+        identities.add(gate_index)
+        results.append(result)
+    return tuple(results)
+
+
 def _parse_query(value: object, path: str) -> QueryEvaluation:
     from retrieval_lab.domain import QueryEvaluation
 
@@ -231,15 +376,14 @@ def result_from_dict(payload: Mapping[str, object]) -> EvaluationResult:
     if isinstance(schema_version, bool) or schema_version != 1:
         raise EvaluationError("result.schema_version must be exactly 1")
     quality_gates = root["quality_gates"]
-    if not isinstance(quality_gates, list):
-        raise EvaluationError("result.quality_gates must be a list")
-    if quality_gates:
-        raise EvaluationError(
-            "result.quality_gates is not loadable in schema version 1"
-        )
     run = _required_mapping(root["run"], "result.run", _REQUIRED_RUN)
     run_id = _string(run["id"], "result.run.id")
     manifest = _mapping(run["manifest"], "result.run.manifest")
+    parsed_quality_gates = _parse_quality_gates(
+        quality_gates,
+        "result.quality_gates",
+        candidate_run_id=run_id,
+    )
     retriever_mapping = _mapping(root["retrievers"], "result.retrievers")
     if not retriever_mapping:
         raise EvaluationError("result.retrievers must not be empty")
@@ -330,6 +474,7 @@ def result_from_dict(payload: Mapping[str, object]) -> EvaluationResult:
         manifest=cast(Mapping[str, JSONValue], manifest),
         schema_version=1,
         latency=latency if latency_presence else None,
+        quality_gates=parsed_quality_gates,
     )
 
 
