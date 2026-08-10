@@ -6,11 +6,11 @@ import builtins
 import math
 import platform
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from time import perf_counter_ns
-from typing import Protocol
+from typing import Protocol, cast
 
 from retrieval_lab.datasets import EvaluationDataset
 from retrieval_lab.domain import (
@@ -24,6 +24,7 @@ from retrieval_lab.evaluation.engine import (
     aggregate_metrics,
     content_hash,
     dataset_payload,
+    evaluate_cutoff_rankings,
     evaluate_ranking,
     normalize_top_k,
 )
@@ -141,18 +142,21 @@ def evaluate_retrievers(
     retrievers: Mapping[str, Retriever],
     top_k: Sequence[int] = (1, 3, 5, 10),
     clock: Callable[[], int] | None = None,
+    chunk_hash: str | None = None,
 ) -> EvaluationResult:
     """Evaluate synchronous external retrievers without a corpus or index.
 
-    Each retriever is called once per query at ``max(top_k)``.  The ranking
-    order returned by the external system is preserved; scores are evidence
-    only and are never used to reorder results.
+    Each retriever is called once per query at ``max(top_k)``.  Fully scored
+    rankings are normalized by descending score and item ID so ties remain
+    deterministic. Rankings without complete score evidence preserve the
+    external system's order.
     """
 
     if not isinstance(dataset, EvaluationDataset):
         raise DatasetValidationError("dataset must be an EvaluationDataset")
     normalized_top_k = normalize_top_k(top_k)
     normalized_retrievers = _validate_retrievers(retrievers)
+    normalized_chunk_hash = _validate_chunk_hash(chunk_hash)
     clock_fn = perf_counter_ns if clock is None else _validate_clock(clock)
     max_k = max(normalized_top_k)
     metrics: dict[str, RetrieverMetrics] = {}
@@ -169,7 +173,6 @@ def evaluate_retrievers(
             started_ns = _read_clock(clock_fn)
             try:
                 raw_items = retriever.retrieve(query.query, top_k=max_k)
-                items = _validate_items(raw_items, top_k=max_k)
             except Exception as exc:
                 raise RetrieverContractError(
                     f"retriever {name!r} failed for query {query.id!r}"
@@ -177,21 +180,44 @@ def evaluate_retrievers(
             finished_ns = _read_clock(clock_fn)
             if finished_ns < started_ns:
                 raise ConfigurationError("clock readings must be monotonic")
+            try:
+                items = _normalize_scored_items(_validate_items(raw_items, top_k=max_k))
+            except RetrieverContractError as exc:
+                raise RetrieverContractError(
+                    f"retriever {name!r} failed for query {query.id!r}"
+                ) from exc
             elapsed_ms = float(finished_ns - started_ns) / 1_000_000.0
             latency_samples.append(elapsed_ms)
             retrieved_ids = _evaluation_ids(
                 items,
                 relevance_level=dataset.relevance_level,
             )
-            evaluations.append(
-                evaluate_ranking(
-                    query_id=query.id,
-                    retrieved_ids=retrieved_ids,
-                    relevance_grades=dataset.relevance_grades_by_query[query.id],
-                    top_k=normalized_top_k,
-                    search_latency_ms=elapsed_ms,
+            if dataset.relevance_level == "document":
+                evaluations.append(
+                    evaluate_cutoff_rankings(
+                        query_id=query.id,
+                        retrieved_ids=retrieved_ids,
+                        retrieved_ids_by_cutoff={
+                            cutoff: _evaluation_ids(
+                                items[:cutoff], relevance_level="document"
+                            )
+                            for cutoff in normalized_top_k
+                        },
+                        relevance_grades=dataset.relevance_grades_by_query[query.id],
+                        top_k=normalized_top_k,
+                        search_latency_ms=elapsed_ms,
+                    )
                 )
-            )
+            else:
+                evaluations.append(
+                    evaluate_ranking(
+                        query_id=query.id,
+                        retrieved_ids=retrieved_ids,
+                        relevance_grades=dataset.relevance_grades_by_query[query.id],
+                        top_k=normalized_top_k,
+                        search_latency_ms=elapsed_ms,
+                    )
+                )
             rankings_payload.append(
                 {
                     "items": [_item_payload(item) for item in items],
@@ -215,6 +241,7 @@ def evaluate_retrievers(
         top_k=normalized_top_k,
         rankings_by_name=rankings_by_name,
         started_at=started_at,
+        chunk_hash=normalized_chunk_hash,
     )
     return EvaluationResult(
         run_id=run_id,
@@ -343,12 +370,40 @@ def _evaluation_ids(
     return tuple(identifiers)
 
 
+def _normalize_scored_items(
+    items: Sequence[RetrievedItem],
+) -> tuple[RetrievedItem, ...]:
+    """Return a deterministic order when every item carries score evidence."""
+
+    normalized = tuple(items)
+    if not normalized or any(item.score is None for item in normalized):
+        return normalized
+    ordered = sorted(
+        normalized,
+        key=lambda item: (-cast(float, item.score), item.id),
+    )
+    if any(item.rank is not None for item in ordered):
+        return tuple(
+            replace(item, rank=rank) for rank, item in enumerate(ordered, start=1)
+        )
+    return tuple(ordered)
+
+
+def _validate_chunk_hash(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError("chunk_hash must be a non-empty string or None")
+    return value
+
+
 def _item_payload(item: RetrievedItem) -> dict[str, JSONValue]:
+    """Return ranking identity without non-semantic score evidence."""
+
     return {
         "id": item.id,
         "parent_document_id": item.parent_document_id,
         "rank": item.rank,
-        "score": item.score,
     }
 
 
@@ -370,6 +425,7 @@ def _with_warnings(
         metrics_by_cutoff=evaluation.metrics_by_cutoff,
         search_latency_ms=evaluation.search_latency_ms,
         warnings=tuple(warnings),
+        retrieved_ids_by_cutoff=evaluation.retrieved_ids_by_cutoff,
     )
 
 
@@ -380,6 +436,7 @@ def _build_manifest(
     top_k: Sequence[int],
     rankings_by_name: Mapping[str, Sequence[Mapping[str, JSONValue]]],
     started_at: str,
+    chunk_hash: str | None = None,
 ) -> tuple[dict[str, JSONValue], str]:
     grades = dataset.relevance_grades_by_query
     dataset_hash = content_hash(dataset_payload(dataset.queries, grades))
@@ -406,6 +463,8 @@ def _build_manifest(
         "retrieved_rankings_hash": rankings_hash,
         "top_k": list(top_k),
     }
+    if chunk_hash is not None:
+        run_payload["chunk_hash"] = chunk_hash
     run_id = content_hash(run_payload)
     manifest: dict[str, JSONValue] = {
         **run_payload,

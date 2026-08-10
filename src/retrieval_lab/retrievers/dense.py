@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from importlib import import_module
+from json import dumps
 from numbers import Real
 from typing import Protocol, cast
 
@@ -54,6 +56,10 @@ class EmbeddingBackend(Protocol):
     @property
     def metadata(self) -> EmbeddingModelMetadata:
         """Return the model identity used to produce embeddings."""
+
+    @property
+    def cache_identity(self) -> JSONValue:
+        """Return stable JSON configuration identity for this backend."""
 
     def encode(
         self,
@@ -108,6 +114,12 @@ class _SentenceTransformersEmbeddingBackend:
 
         return self._metadata
 
+    @property
+    def cache_identity(self) -> JSONValue:
+        """Return the built-in provider identity required by the protocol."""
+
+        return "sentence-transformers"
+
     def encode(
         self,
         texts: Sequence[str],
@@ -133,11 +145,21 @@ class _SentenceTransformersEmbeddingBackend:
 
         try:
             module = import_module("sentence_transformers")
-        except ImportError:
-            raise OptionalDependencyError(
-                "Dense retrieval requires the optional dependency; install it with "
-                "`pip install retrieval-lab[dense]`."
-            ) from None
+        except ImportError as exc:
+            # A missing top-level optional package is actionable for callers.
+            # Import failures from one of its transitive dependencies are
+            # provider failures and must retain their original cause.
+            if (
+                isinstance(exc, ModuleNotFoundError)
+                and exc.name == "sentence_transformers"
+            ):
+                raise OptionalDependencyError(
+                    "Dense retrieval requires the optional dependency; install it with "
+                    "`pip install retrieval-lab[dense]`."
+                ) from None
+            raise RetrieverContractError(
+                "dense embedding backend failed while importing sentence-transformers"
+            ) from exc
 
         factory = cast(
             _SentenceTransformerFactory,
@@ -214,6 +236,7 @@ class DenseRetriever(BaseRetriever):
         self._chunks: tuple[Chunk, ...] | None = None
         self._vectors: tuple[tuple[float, ...], ...] = ()
         self._dimension: int | None = None
+        self._indexed_identity: Mapping[str, JSONValue] | None = None
         # Cache restoration may know a resolved revision that the backend does
         # not expose until it is loaded.  Keep that metadata on the retriever,
         # never by mutating an arbitrary user-supplied backend object.
@@ -231,12 +254,57 @@ class DenseRetriever(BaseRetriever):
 
         return isinstance(self._backend, _SentenceTransformersEmbeddingBackend)
 
+    def _cache_identity(self, *, require_custom: bool = True) -> dict[str, JSONValue]:
+        """Return the backend identity used to isolate custom index artifacts.
+
+        Custom providers must expose a stable JSON-compatible ``cache_identity``.
+        Only its digest is serialized so provider configuration and credentials
+        cannot leak through result manifests.
+        """
+
+        implementation = type(self._backend)
+        identity: dict[str, JSONValue] = {
+            "backend_type": f"{implementation.__module__}.{implementation.__qualname__}"
+        }
+        if self.uses_default_backend:
+            return identity
+        missing = object()
+        try:
+            custom_identity = getattr(self._backend, "cache_identity", missing)
+        except Exception as exc:
+            raise RetrieverContractError(
+                "embedding backend cache identity could not be read"
+            ) from exc
+        if custom_identity is missing or custom_identity is None:
+            if require_custom:
+                raise RetrieverContractError(
+                    "custom embedding backend must provide a stable non-null "
+                    "cache_identity"
+                )
+            return identity
+        try:
+            normalized = _normalize_cache_identity(custom_identity)
+            canonical = dumps(
+                normalized,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            identity["cache_identity_sha256"] = sha256(canonical).hexdigest()
+        except RecursionError as exc:
+            raise RetrieverContractError(
+                "embedding backend cache identity is cyclic or too deeply nested"
+            ) from exc
+        return identity
+
     @property
     def settings(self) -> Mapping[str, JSONValue]:
         """Return the deterministic dense configuration for a run manifest."""
 
         metadata = self._effective_metadata()
         return {
+            "backend": self._cache_identity(),
             "batch_size": self._batch_size,
             "document_prompt": self._document_prompt,
             "model_id": metadata.model_id,
@@ -256,23 +324,42 @@ class DenseRetriever(BaseRetriever):
         # HybridRetriever can share one DenseRetriever instance with a
         # top-level strategy.  Re-indexing the exact same chunks is a no-op,
         # which also prevents a second backend encode call.
-        if self._chunks == indexed:
+        current_identity = self._index_identity()
+        if self._chunks == indexed and self._indexed_identity == current_identity:
             return
+        previous_override = self._metadata_override
         self._metadata_override = None
         document_texts = tuple(self._document_prompt + chunk.text for chunk in indexed)
-        if document_texts:
-            vectors = self._encode(document_texts, context="documents")
-        else:
-            vectors = ()
-
-        # A lazy backend can update its resolved model revision during encoding.
-        # Revalidate this externally visible metadata before atomically publishing
-        # the replacement index.
-        self._metadata_for(self._backend)
+        try:
+            if document_texts:
+                vectors = self._encode(document_texts, context="documents")
+            else:
+                vectors = ()
+            # A lazy backend can update its resolved model revision during
+            # encoding. Validate it before publishing the replacement index.
+            self._metadata_for(self._backend)
+            replacement_identity = self._index_identity()
+        except Exception:
+            self._metadata_override = previous_override
+            raise
         dimension = len(vectors[0]) if vectors else None
         self._chunks = indexed
         self._vectors = vectors
         self._dimension = dimension
+        self._indexed_identity = replacement_identity
+
+    def _index_identity(self) -> Mapping[str, JSONValue]:
+        """Return settings that determine the stored document vectors."""
+
+        metadata = self._effective_metadata()
+        return {
+            "backend": self._cache_identity(require_custom=False),
+            "document_prompt": self._document_prompt,
+            "model_id": metadata.model_id,
+            "normalize_embeddings": self._normalize_embeddings,
+            "requested_revision": metadata.requested_revision,
+            "resolved_revision": metadata.resolved_revision,
+        }
 
     def _effective_metadata(self) -> EmbeddingModelMetadata:
         """Return backend metadata plus any safe cache-restored revision."""
@@ -282,6 +369,7 @@ class DenseRetriever(BaseRetriever):
         if override is not None and (
             override.model_id == metadata.model_id
             and override.requested_revision == metadata.requested_revision
+            and metadata.resolved_revision is None
         ):
             return override
         return metadata
@@ -318,14 +406,21 @@ class DenseRetriever(BaseRetriever):
             context="cached documents",
         )
         dimension = len(validated[0])
+        metadata = self._metadata_for(self._backend)
+        if (
+            metadata.resolved_revision is not None
+            and metadata.resolved_revision != resolved_revision
+        ):
+            raise RetrieverContractError("dense cache resolved revision is stale")
         self._metadata_override = EmbeddingModelMetadata(
-            model_id=self._metadata_for(self._backend).model_id,
-            requested_revision=self._metadata_for(self._backend).requested_revision,
+            model_id=metadata.model_id,
+            requested_revision=metadata.requested_revision,
             resolved_revision=resolved_revision,
         )
         self._chunks = indexed
         self._vectors = validated
         self._dimension = dimension
+        self._indexed_identity = self._index_identity()
 
     def search(self, query: str, top_k: int) -> list[SearchResult]:
         """Encode one query and return the top exact inner-product results."""
@@ -347,6 +442,15 @@ class DenseRetriever(BaseRetriever):
             (self._query_prompt + query,),
             context="query",
         )[0]
+        if self._metadata_override is not None:
+            current_metadata = self._metadata_for(self._backend)
+            if (
+                current_metadata.resolved_revision
+                != self._metadata_override.resolved_revision
+            ):
+                raise RetrieverContractError(
+                    "dense cache resolved revision changed after query initialization"
+                )
         if self._dimension is None:
             return []
         if len(query_vector) != self._dimension:
@@ -513,7 +617,13 @@ def _validate_embedding_matrix(
                     f"dense {context} embedding row {row_index} value {value_index} "
                     "must be a finite real number"
                 )
-            normalized = float(value)
+            try:
+                normalized = float(value)
+            except OverflowError as exc:
+                raise RetrieverContractError(
+                    f"dense {context} embedding row {row_index} value {value_index} "
+                    "must be a finite real number"
+                ) from exc
             if not math.isfinite(normalized):
                 raise RetrieverContractError(
                     f"dense {context} embedding row {row_index} value {value_index} "
@@ -609,6 +719,34 @@ def _is_commit_hash(value: object) -> bool:
         isinstance(value, str)
         and len(value) in {40, 64}
         and all(character in "0123456789abcdefABCDEF" for character in value)
+    )
+
+
+def _normalize_cache_identity(value: object) -> JSONValue:
+    """Validate a provider-supplied cache identity without invoking JSON sorting."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise RetrieverContractError(
+                "embedding backend cache identity must be finite"
+            )
+        return value
+    if isinstance(value, Mapping):
+        keys = tuple(value)
+        if not all(isinstance(key, str) for key in keys):
+            raise RetrieverContractError(
+                "embedding backend cache identity keys must be strings"
+            )
+        return {
+            key: _normalize_cache_identity(value[key])
+            for key in sorted(cast(tuple[str, ...], keys))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize_cache_identity(item) for item in value]
+    raise RetrieverContractError(
+        "embedding backend cache identity must contain JSON values"
     )
 
 

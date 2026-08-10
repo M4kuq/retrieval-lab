@@ -71,6 +71,58 @@ def test_query_evaluation_translates_latency_float_overflow() -> None:
         )
 
 
+def test_query_evaluation_round_trips_cutoff_ranking_evidence() -> None:
+    query = QueryEvaluation(
+        query_id="q-1",
+        retrieved_ids=("doc-a", "doc-b"),
+        metrics_by_cutoff={
+            2: {"recall": 0.0},
+            3: {"recall": 1.0},
+        },
+        retrieved_ids_by_cutoff={
+            2: ("doc-a",),
+            3: ("doc-a", "doc-b"),
+        },
+    )
+    result = EvaluationResult(
+        run_id="run",
+        metrics={"system": RetrieverMetrics({2: {"recall": 0.0}, 3: {"recall": 1.0}})},
+        query_results={"system": [query]},
+    )
+
+    loaded = EvaluationResult.from_json(result.to_json())
+
+    assert loaded.query_results["system"][0].retrieved_ids_by_cutoff == {
+        2: ("doc-a",),
+        3: ("doc-a", "doc-b"),
+    }
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {2: ("doc-a",)},
+        {2: ("doc-a", "doc-a"), 3: ("doc-a", "doc-b")},
+        {2: ("doc-b",), 3: ("doc-a", "doc-b")},
+        {True: ("doc-a",), 3: ("doc-a", "doc-b")},
+        {2.0: ("doc-a",), 3: ("doc-a", "doc-b")},
+        {"2": ("doc-a",), 3: ("doc-a", "doc-b")},
+        {2: ("doc-a", "doc-b"), 3: ("doc-a",)},
+        {2: (), 3: ("doc-a", "doc-b")},
+    ],
+)
+def test_query_evaluation_rejects_invalid_cutoff_evidence(
+    evidence: object,
+) -> None:
+    with pytest.raises(EvaluationError, match="retrieved_ids_by_cutoff"):
+        QueryEvaluation(
+            query_id="q-1",
+            retrieved_ids=("doc-a", "doc-b"),
+            metrics_by_cutoff={2: {"recall": 0.0}, 3: {"recall": 1.0}},
+            retrieved_ids_by_cutoff=evidence,  # type: ignore[arg-type]
+        )
+
+
 def test_result_rejects_mixed_per_query_latency_with_aggregate() -> None:
     timed_base = _query_evaluation("q-timed")
     timed = QueryEvaluation(

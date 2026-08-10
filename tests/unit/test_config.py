@@ -95,8 +95,9 @@ def test_load_config_and_yaml_runner_are_deterministic(tmp_path: Path) -> None:
         chunker=FixedSizeChunker(size=32, overlap=4),
         seed=42,
     ).run()
-    assert result.run_id == direct.run_id
     assert typed_result.run_id == result.run_id
+    assert result.run_id != direct.run_id
+    assert result.manifest["quality_gate_policy_hash"]
     assert typed_result.metrics == result.metrics
     assert result.metrics == direct.metrics
     assert result.manifest["config"]["experiment"]["cache_dir"] == "cache"  # type: ignore[index]
@@ -540,6 +541,33 @@ def test_quality_gate_drop_fields_are_normalized_and_unknown_fields_rejected(
     )
     with pytest.raises(ConfigurationError, match=r"quality_gates\[0\]\.typo"):
         load_config(path)
+
+
+def test_hybrid_sources_are_normalized_to_an_immutable_tuple() -> None:
+    sources = ["bm25", "dense"]
+
+    config = HybridRetrieverConfig(
+        name="hybrid",
+        sources=sources,  # type: ignore[arg-type]
+    )
+    sources.append("keyword")
+
+    assert config.sources == ("bm25", "dense")
+
+
+def test_quality_gate_wraps_oversized_numeric_values() -> None:
+    with pytest.raises(ConfigurationError, match="cutoff"):
+        QualityGateConfig(
+            retriever="bm25",
+            metric="recall@" + "9" * 5000,
+            min_value=0.5,
+        )
+    with pytest.raises(ConfigurationError, match="finite"):
+        QualityGateConfig(
+            retriever="bm25",
+            metric="recall@1",
+            min_value=10**10000,
+        )
 
 
 def test_config_rejects_unreadable_and_non_mapping_inputs(tmp_path: Path) -> None:

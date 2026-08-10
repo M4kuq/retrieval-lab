@@ -79,6 +79,7 @@ class HybridRetriever(BaseRetriever):
         self._rrf_k = rrf_k
         self._candidate_k = candidate_k
         self._indexed = False
+        self._indexed_chunks: tuple[Chunk, ...] | None = None
 
     @property
     def name(self) -> str:
@@ -125,10 +126,32 @@ class HybridRetriever(BaseRetriever):
 
     def index(self, chunks: Sequence[Chunk]) -> None:
         """Index every source with the same supplied chunks."""
+        indexed = _validate_shared_chunks(chunks)
+        if self._indexed and self._indexed_chunks == indexed:
+            return
         self._indexed = False
         for source in self._sources:
             source.index(chunks)
         self._indexed = True
+        self._indexed_chunks = indexed
+
+    def _index_sources_once(
+        self,
+        chunks: Sequence[Chunk],
+        indexed_retriever_ids: set[int],
+    ) -> None:
+        """Index shared sources once when a runner exposes them separately."""
+
+        indexed = _validate_shared_chunks(chunks)
+        if self._indexed and self._indexed_chunks == indexed:
+            return
+        self._indexed = False
+        for source in self._sources:
+            if id(source) not in indexed_retriever_ids:
+                source.index(chunks)
+                indexed_retriever_ids.add(id(source))
+        self._indexed = True
+        self._indexed_chunks = indexed
 
     def search(self, query: str, top_k: int) -> list[SearchResult]:
         """Return the top fused candidates, sorted by RRF score then chunk ID."""
@@ -241,6 +264,24 @@ def _normalize_json_value(value: object, *, location: str) -> JSONValue:
     raise RetrieverContractError(
         f"{location} contains unsupported JSON value type {type(value).__name__}"
     )
+
+
+def _validate_shared_chunks(chunks: Sequence[Chunk]) -> tuple[Chunk, ...]:
+    """Validate the shared index boundary before invoking any source."""
+
+    if isinstance(chunks, (str, bytes)) or not isinstance(chunks, Sequence):
+        raise RetrieverContractError("chunks must be a sequence of Chunk records")
+    indexed = tuple(chunks)
+    seen: set[str] = set()
+    for position, chunk in enumerate(indexed):
+        if not isinstance(chunk, Chunk):
+            raise RetrieverContractError(f"chunks[{position}] must be a Chunk record")
+        if chunk.id in seen:
+            raise RetrieverContractError(
+                f"hybrid index received duplicate chunk identifier: {chunk.id}"
+            )
+        seen.add(chunk.id)
+    return indexed
 
 
 __all__ = ["HybridRetriever"]

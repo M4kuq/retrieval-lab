@@ -18,6 +18,7 @@ from retrieval_lab import (
     CallableRetriever,
     EvaluationDataset,
     EvaluationQuery,
+    EvaluationResult,
     RetrievedItem,
     evaluate_async_retrievers,
     evaluate_retrievers,
@@ -73,6 +74,99 @@ def test_async_callable_invokes_keyword_top_k_and_uses_structural_typing() -> No
         "first",
     ]
     assert calls == [("query", 2)]
+
+
+def test_async_evaluation_normalizes_scored_ties_by_item_id() -> None:
+    async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [
+            RetrievedItem("z", score=1.0, rank=1),
+            RetrievedItem("a", score=1.0, rank=2),
+        ]
+
+    dataset = EvaluationDataset(
+        [EvaluationQuery(id="q", query="query", relevant_chunk_ids={"a"})],
+        relevance_level="chunk",
+    )
+    result = cast(
+        EvaluationResult,
+        _run(
+            evaluate_async_retrievers(
+                dataset=dataset,
+                retrievers={"scored": AsyncCallableRetriever("scored", search)},
+                top_k=[1, 2],
+            )
+        ),
+    )
+
+    assert result.query_results["scored"][0].retrieved_ids == ("a", "z")
+    assert result.metrics["scored"].recall_at(1) == 1.0
+
+
+def test_async_chunk_hash_and_document_cutoffs_are_preserved() -> None:
+    async def chunk_search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [RetrievedItem("chunk-a")]
+
+    chunk_result = cast(
+        EvaluationResult,
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"chunks": AsyncCallableRetriever("chunks", chunk_search)},
+                top_k=[1],
+                chunk_hash="chunk-definition-v1",
+            )
+        ),
+    )
+    assert chunk_result.manifest["chunk_hash"] == "chunk-definition-v1"
+    with pytest.raises(ConfigurationError, match="chunk_hash"):
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"chunks": AsyncCallableRetriever("chunks", chunk_search)},
+                top_k=[1],
+                chunk_hash="",
+            )
+        )
+
+    async def document_search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [
+            RetrievedItem("a-1", parent_document_id="doc-a"),
+            RetrievedItem("a-2", parent_document_id="doc-a"),
+            RetrievedItem("b-1", parent_document_id="doc-b"),
+        ][:top_k]
+
+    dataset = EvaluationDataset(
+        [EvaluationQuery(id="q", query="query", relevant_document_ids={"doc-b"})]
+    )
+    retriever = AsyncCallableRetriever("documents", document_search)
+    narrow = cast(
+        EvaluationResult,
+        _run(
+            evaluate_async_retrievers(
+                dataset=dataset,
+                retrievers={"documents": retriever},
+                top_k=[2],
+            )
+        ),
+    )
+    wide = cast(
+        EvaluationResult,
+        _run(
+            evaluate_async_retrievers(
+                dataset=dataset,
+                retrievers={"documents": retriever},
+                top_k=[2, 3],
+            )
+        ),
+    )
+    assert narrow.metrics["documents"].recall_at(2) == 0.0
+    assert wide.metrics["documents"].recall_at(2) == 0.0
+    assert wide.metrics["documents"].recall_at(3) == 1.0
+    evidence = wide.query_results["documents"][0]
+    assert evidence.retrieved_ids_by_cutoff == {
+        2: ("doc-a",),
+        3: ("doc-a", "doc-b"),
+    }
 
 
 @pytest.mark.parametrize(
@@ -240,6 +334,34 @@ def test_async_evaluation_allows_score_drift_when_ranking_identity_is_stable() -
         )
     )
     assert result.query_results["a"][0].retrieved_ids == ("chunk-a",)  # type: ignore[union-attr]
+
+
+def test_async_score_magnitude_does_not_change_ranking_run_identity() -> None:
+    def evaluate(start: float):
+        score = start
+
+        async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+            nonlocal score
+            score += 1.0
+            return [RetrievedItem("chunk-a", score=score, rank=1)]
+
+        return _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"a": AsyncCallableRetriever("a", search)},
+                top_k=[1],
+                repetitions=2,
+            )
+        )
+
+    first = evaluate(0.0)
+    second = evaluate(100.0)
+
+    assert first.run_id == second.run_id  # type: ignore[union-attr]
+    assert (  # type: ignore[union-attr]
+        first.manifest["retrieved_rankings_hash"]
+        == second.manifest["retrieved_rankings_hash"]
+    )
 
 
 def test_async_external_cancellation_wins_over_provider_cleanup_failure() -> None:

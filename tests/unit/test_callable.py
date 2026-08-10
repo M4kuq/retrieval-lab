@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import cast
 
 import pytest
@@ -17,6 +17,7 @@ from retrieval_lab import (
     EvaluationRunner,
     RetrievedItem,
     Retriever,
+    check_comparability,
     evaluate_retrievers,
 )
 from retrieval_lab.evaluation.precomputed import RetrievedQueryResult, evaluate_results
@@ -288,12 +289,173 @@ def test_evaluate_retrievers_uses_item_ids_for_chunk_relevance() -> None:
         dataset=_chunk_dataset(),
         retrievers={"chunks": retriever},
         top_k=[1, 2],
+        chunk_hash="chunk-definition-v1",
     )
     assert result.query_results["chunks"][0].retrieved_ids == (
         "chunk-a",
         "chunk-b",
     )
     assert result.metrics["chunks"].recall_at(2) == 1.0
+    assert result.manifest["chunk_hash"] == "chunk-definition-v1"
+
+
+def test_callable_chunk_hash_controls_strict_comparability_and_run_id() -> None:
+    retriever = CallableRetriever(
+        "chunks",
+        lambda query, top_k: [RetrievedItem("chunk-a")],
+    )
+    first = evaluate_retrievers(
+        dataset=_chunk_dataset(),
+        retrievers={"chunks": retriever},
+        top_k=[1],
+        chunk_hash="chunk-definition-v1",
+    )
+    same = evaluate_retrievers(
+        dataset=_chunk_dataset(),
+        retrievers={"chunks": retriever},
+        top_k=[1],
+        chunk_hash="chunk-definition-v1",
+    )
+    different = evaluate_retrievers(
+        dataset=_chunk_dataset(),
+        retrievers={"chunks": retriever},
+        top_k=[1],
+        chunk_hash="chunk-definition-v2",
+    )
+    missing = evaluate_retrievers(
+        dataset=_chunk_dataset(),
+        retrievers={"chunks": retriever},
+        top_k=[1],
+    )
+
+    assert first.run_id == same.run_id
+    assert first.run_id != different.run_id
+    assert check_comparability(first, same).comparable
+    assert not check_comparability(first, different).comparable
+    assert not check_comparability(first, missing).comparable
+    with pytest.raises(ConfigurationError, match="chunk_hash"):
+        evaluate_retrievers(
+            dataset=_chunk_dataset(),
+            retrievers={"chunks": retriever},
+            top_k=[1],
+            chunk_hash="",
+        )
+
+
+def test_document_metrics_do_not_change_when_a_larger_cutoff_is_added() -> None:
+    dataset = EvaluationDataset(
+        [EvaluationQuery(id="q", query="query", relevant_document_ids={"doc-b"})]
+    )
+
+    def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [
+            RetrievedItem("a-1", parent_document_id="doc-a"),
+            RetrievedItem("a-2", parent_document_id="doc-a"),
+            RetrievedItem("b-1", parent_document_id="doc-b"),
+        ][:top_k]
+
+    retriever = CallableRetriever("documents", search)
+    narrow = evaluate_retrievers(
+        dataset=dataset,
+        retrievers={"documents": retriever},
+        top_k=[2],
+    )
+    wide = evaluate_retrievers(
+        dataset=dataset,
+        retrievers={"documents": retriever},
+        top_k=[2, 3],
+    )
+
+    assert narrow.metrics["documents"].recall_at(2) == 0.0
+    assert wide.metrics["documents"].recall_at(2) == 0.0
+    assert wide.metrics["documents"].recall_at(3) == 1.0
+    evidence = wide.query_results["documents"][0]
+    assert evidence.retrieved_ids_by_cutoff == {
+        2: ("doc-a",),
+        3: ("doc-a", "doc-b"),
+    }
+
+
+def test_evaluate_retrievers_normalizes_scored_ties_by_item_id() -> None:
+    dataset = EvaluationDataset(
+        [EvaluationQuery(id="q", query="query", relevant_chunk_ids={"a"})],
+        relevance_level="chunk",
+    )
+    retriever = CallableRetriever(
+        "scored",
+        lambda query, top_k: [
+            RetrievedItem("z", score=1.0, rank=1),
+            RetrievedItem("a", score=1.0, rank=2),
+        ],
+    )
+
+    result = evaluate_retrievers(
+        dataset=dataset,
+        retrievers={"scored": retriever},
+        top_k=[1, 2],
+    )
+
+    query = result.query_results["scored"][0]
+    assert query.retrieved_ids == ("a", "z")
+    assert result.metrics["scored"].recall_at(1) == 1.0
+
+
+def test_score_magnitude_does_not_change_ranking_run_identity() -> None:
+    def evaluate(score: float):
+        retriever = CallableRetriever(
+            "scored",
+            lambda query, top_k: [
+                RetrievedItem("a", score=score, rank=1),
+                RetrievedItem("b", score=score - 1.0, rank=2),
+            ],
+        )
+        return evaluate_retrievers(
+            dataset=_chunk_dataset(),
+            retrievers={"scored": retriever},
+            top_k=[1, 2],
+        )
+
+    first = evaluate(2.0)
+    second = evaluate(200.0)
+
+    assert first.run_id == second.run_id
+    assert (
+        first.manifest["retrieved_rankings_hash"]
+        == second.manifest["retrieved_rankings_hash"]
+    )
+
+
+def test_evaluate_retrievers_stops_clock_before_result_validation() -> None:
+    now_ns = 0
+
+    class DelayedSequence(Sequence[RetrievedItem]):
+        def __iter__(self) -> Iterator[RetrievedItem]:
+            nonlocal now_ns
+            now_ns = 100_000_000
+            yield RetrievedItem("chunk-a")
+
+        def __getitem__(self, index: int) -> RetrievedItem:
+            if index != 0:
+                raise IndexError(index)
+            return RetrievedItem("chunk-a")
+
+        def __len__(self) -> int:
+            return 1
+
+    class RetrieverWithDelayedResults:
+        name = "delayed"
+
+        def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            return DelayedSequence()
+
+    result = evaluate_retrievers(
+        dataset=_chunk_dataset(),
+        retrievers={"delayed": RetrieverWithDelayedResults()},  # type: ignore[dict-item]
+        top_k=[1],
+        clock=lambda: now_ns,
+    )
+
+    assert result.query_results["delayed"][0].search_latency_ms == 0.0
 
 
 def test_evaluate_retrievers_matches_precomputed_metrics() -> None:

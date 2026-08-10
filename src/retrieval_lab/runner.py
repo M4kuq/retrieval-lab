@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import platform
 from collections.abc import Mapping, Sequence
@@ -39,6 +40,7 @@ from retrieval_lab.evaluation.engine import (
     aggregate_metrics,
     content_hash,
     dataset_payload,
+    evaluate_cutoff_rankings,
     evaluate_ranking,
     normalize_top_k,
     plain_json,
@@ -53,6 +55,7 @@ from retrieval_lab.exceptions import (
     DatasetValidationError,
     EvaluationError,
     RetrievalLabError,
+    RetrieverContractError,
 )
 from retrieval_lab.loaders import load_documents
 from retrieval_lab.retrievers import (
@@ -274,8 +277,7 @@ class EvaluationRunner:
             chunker=self._chunker,
         )
         cache_events: list[dict[str, JSONValue]] = []
-        index_hashes: dict[str, JSONValue] = {}
-        cache_build_ms: dict[str, float] = {}
+        cache_build_ms: dict[int, float] = {}
         shared_cache_ms = 0.0
         if self._cache_dir is not None:
             chunks, chunk_event = self._prepare_chunk_cache(
@@ -291,10 +293,22 @@ class EvaluationRunner:
             cache_events.extend(dense_events)
             cache_build_ms.update(dense_build_ms)
 
+        indexed_retriever_ids: set[int] = (
+            {
+                id(retriever)
+                for _identity, retriever in _dense_retriever_entries(self._retrievers)
+            }
+            if self._cache_dir is not None
+            else set()
+        )
         for retriever in self._retrievers:
             build_started_ns = perf_counter_ns()
             try:
-                retriever.index(chunks)
+                if isinstance(retriever, HybridRetriever):
+                    retriever._index_sources_once(chunks, indexed_retriever_ids)
+                elif id(retriever) not in indexed_retriever_ids:
+                    retriever.index(chunks)
+                    indexed_retriever_ids.add(id(retriever))
             except RetrievalLabError:
                 raise
             except Exception as exc:
@@ -359,6 +373,10 @@ class EvaluationRunner:
             query_results[retriever.name] = tuple(evaluations)
             latency_stats[retriever.name] = stats
 
+        index_hashes = _dense_index_hashes(
+            self._retrievers,
+            chunk_hash=chunk_hash,
+        )
         manifest, run_id = _build_manifest(
             documents=self._documents,
             queries=self._queries,
@@ -451,30 +469,26 @@ class EvaluationRunner:
     ) -> tuple[
         dict[str, JSONValue],
         list[dict[str, JSONValue]],
-        dict[str, float],
+        dict[int, float],
     ]:
         """Restore or build every shared DenseRetriever before evaluation."""
 
         assert self._cache_dir is not None
         index_hashes: dict[str, JSONValue] = {}
         events: list[dict[str, JSONValue]] = []
-        build_ms: dict[str, float] = {}
-        seen: set[int] = set()
-        for retriever in _find_dense_retrievers(self._retrievers):
-            if id(retriever) in seen:
-                continue
-            seen.add(id(retriever))
-            settings = plain_json(retriever.settings)
-            index_hash = dense_index_hash(chunk_hash, settings)
-            index_hashes[retriever.name] = index_hash
+        build_ms: dict[int, float] = {}
+        for identity_key, retriever in _dense_retriever_entries(self._retrievers):
+            settings = _retriever_settings(retriever)
+            storage_settings = _dense_storage_settings(settings)
+            storage_index_hash = dense_index_hash(chunk_hash, storage_settings)
             identity: dict[str, JSONValue] = {
                 "name": retriever.name,
-                "settings": settings,
+                "settings": storage_settings,
             }
             started_ns = perf_counter_ns()
             read = read_dense_index_artifact(
                 self._cache_dir,
-                index_hash=index_hash,
+                index_hash=storage_index_hash,
                 chunk_hash=chunk_hash,
                 retriever_identity=identity,
                 chunks=chunks,
@@ -487,9 +501,9 @@ class EvaluationRunner:
             )
             event: dict[str, JSONValue] = {
                 "artifact": "dense_index",
-                "retriever": retriever.name,
+                "retriever": identity_key,
                 "status": read.status.value,
-                "index_hash": index_hash,
+                "storage_index_hash": storage_index_hash,
             }
             if read.reason is not None:
                 event["reason"] = read.reason
@@ -504,8 +518,13 @@ class EvaluationRunner:
                     event["status"] = CacheStatus.CORRUPT.value
                     event["reason"] = str(exc)
                 else:
+                    logical_index_hash = dense_index_hash(
+                        chunk_hash, _retriever_settings(retriever)
+                    )
+                    index_hashes[identity_key] = logical_index_hash
+                    event["index_hash"] = logical_index_hash
                     event["duration_ms"] = _elapsed_ms(started_ns)
-                    build_ms[retriever.name] = _event_duration_ms(event)
+                    build_ms[id(retriever)] = _event_duration_ms(event)
                     events.append(event)
                     continue
 
@@ -515,7 +534,7 @@ class EvaluationRunner:
                 try:
                     write_dense_index_artifact(
                         self._cache_dir,
-                        index_hash=index_hash,
+                        index_hash=storage_index_hash,
                         chunk_hash=chunk_hash,
                         retriever_identity=identity,
                         chunks=indexed_chunks,
@@ -535,8 +554,13 @@ class EvaluationRunner:
                 raise EvaluationError(
                     f"dense retriever {retriever.name!r} cache rebuild failed"
                 ) from exc
+            logical_index_hash = dense_index_hash(
+                chunk_hash, _retriever_settings(retriever)
+            )
+            index_hashes[identity_key] = logical_index_hash
+            event["index_hash"] = logical_index_hash
             event["duration_ms"] = _elapsed_ms(started_ns)
-            build_ms[retriever.name] = _event_duration_ms(event)
+            build_ms[id(retriever)] = _event_duration_ms(event)
             events.append(event)
         return index_hashes, events, build_ms
 
@@ -556,9 +580,9 @@ class EvaluationRunner:
             _elapsed_ms(started_ns)
             failure_count[0] += 1
             raise
+        ranked_chunks = stable_rank_results(raw_results, top_k=max_k)
         search_latency_ms = _elapsed_ms(started_ns)
         latency_samples.append(search_latency_ms)
-        ranked_chunks = stable_rank_results(raw_results, top_k=max_k)
         if self._relevance_level == "document":
             if not query.relevant_document_ids:
                 raise DatasetValidationError(
@@ -574,7 +598,21 @@ class EvaluationRunner:
                     "this chunk-level runner"
                 )
             retrieved_ids = tuple(item.chunk_id for item in ranked_chunks)
-
+        if self._relevance_level == "document":
+            return evaluate_cutoff_rankings(
+                query_id=query.id,
+                retrieved_ids=retrieved_ids,
+                retrieved_ids_by_cutoff={
+                    cutoff: tuple(
+                        item.document_id
+                        for item in collapse_to_documents(ranked_chunks[:cutoff])
+                    )
+                    for cutoff in self._top_k
+                },
+                relevance_grades=self._relevance_grades_by_query[query.id],
+                top_k=self._top_k,
+                search_latency_ms=search_latency_ms,
+            )
         return evaluate_ranking(
             query_id=query.id,
             retrieved_ids=retrieved_ids,
@@ -659,12 +697,12 @@ def _index_size_bytes(retriever: BaseRetriever) -> int | None:
 
 def _cached_dense_build_ms(
     retriever: BaseRetriever,
-    build_ms_by_name: Mapping[str, float],
+    build_ms_by_id: Mapping[int, float],
 ) -> float:
     """Attribute cached Dense preparation to each top-level strategy using it."""
 
     if isinstance(retriever, DenseRetriever):
-        return build_ms_by_name.get(retriever.name, 0.0)
+        return build_ms_by_id.get(id(retriever), 0.0)
     if not isinstance(retriever, HybridRetriever):
         return 0.0
 
@@ -674,7 +712,7 @@ def _cached_dense_build_ms(
         if not isinstance(source, DenseRetriever) or id(source) in seen:
             continue
         seen.add(id(source))
-        duration_ms += build_ms_by_name.get(source.name, 0.0)
+        duration_ms += build_ms_by_id.get(id(source), 0.0)
     return duration_ms
 
 
@@ -847,11 +885,19 @@ def _build_manifest(
     chunk_hash = calculated_chunk_hash
     retriever_names = tuple(retriever.name for retriever in retrievers)
     retriever_settings: dict[str, JSONValue] = {
-        retriever.name: plain_json(retriever.settings) for retriever in retrievers
+        retriever.name: _retriever_settings(retriever) for retriever in retrievers
     }
+    normalized_index_hashes = (
+        dict(index_hashes)
+        if index_hashes is not None
+        else _dense_index_hashes(retrievers, chunk_hash=chunk_hash)
+    )
     run_payload: dict[str, JSONValue] = {
         "chunk_hash": chunk_hash,
         "dataset_hash": dataset_hash,
+        "index_hashes": {
+            key: normalized_index_hashes[key] for key in sorted(normalized_index_hashes)
+        },
         "metric_version": 1,
         "relevance_level": relevance_level,
         "retrievers": _json_values(retriever_names),
@@ -859,6 +905,12 @@ def _build_manifest(
         "seed": seed,
         "top_k": _json_values(top_k),
     }
+    quality_gate_policy_hash: str | None = None
+    if config_settings is not None:
+        raw_policy = config_settings.get("quality_gates", [])
+        if raw_policy:
+            quality_gate_policy_hash = content_hash(raw_policy)
+            run_payload["quality_gate_policy_hash"] = quality_gate_policy_hash
     run_id = content_hash(run_payload)
     manifest: dict[str, JSONValue] = {
         "chunk_count": len(chunks),
@@ -876,10 +928,11 @@ def _build_manifest(
         "seed": seed,
         "top_k": _json_values(top_k),
     }
-    if index_hashes:
-        manifest["index_hashes"] = {
-            key: index_hashes[key] for key in sorted(index_hashes)
-        }
+    if quality_gate_policy_hash is not None:
+        manifest["quality_gate_policy_hash"] = quality_gate_policy_hash
+    manifest["index_hashes"] = {
+        key: normalized_index_hashes[key] for key in sorted(normalized_index_hashes)
+    }
     if cache_events:
         # Runtime cache observations are intentionally outside run_payload, so
         # hit/miss/corruption never changes the reproducible run ID.
@@ -938,26 +991,114 @@ def _chunk_hash(
     )
 
 
-def _find_dense_retrievers(
+def _dense_retriever_entries(
     retrievers: Sequence[BaseRetriever],
-) -> tuple[DenseRetriever, ...]:
-    """Find built-in Dense instances, including shared Hybrid sources."""
+) -> tuple[tuple[str, DenseRetriever], ...]:
+    """Find Dense instances with stable, collision-free strategy paths."""
 
-    found: list[DenseRetriever] = []
+    found: list[tuple[str, DenseRetriever]] = []
+    seen: set[int] = set()
     for retriever in retrievers:
-        if isinstance(retriever, DenseRetriever):
-            found.append(retriever)
-        elif isinstance(retriever, HybridRetriever):
-            found.extend(
-                source
-                for source in retriever._sources
-                if isinstance(source, DenseRetriever)
-            )
+        if isinstance(retriever, DenseRetriever) and id(retriever) not in seen:
+            found.append((retriever.name, retriever))
+            seen.add(id(retriever))
+    for retriever in retrievers:
+        if not isinstance(retriever, HybridRetriever):
+            continue
+        for source_name, source in zip(
+            retriever._source_names, retriever._sources, strict=True
+        ):
+            if isinstance(source, DenseRetriever) and id(source) not in seen:
+                found.append((f"{retriever.name}.sources.{source_name}", source))
+                seen.add(id(source))
     return tuple(found)
 
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _retriever_settings(retriever: BaseRetriever) -> dict[str, JSONValue]:
+    """Read and normalize a custom retriever's settings at the API boundary."""
+
+    try:
+        raw_settings = retriever.settings
+    except RetrievalLabError:
+        raise
+    except Exception as exc:
+        raise RetrieverContractError(
+            f"retriever {retriever.name!r} settings could not be read"
+        ) from exc
+    try:
+        normalized = _normalize_retriever_json(
+            raw_settings,
+            location=f"retriever {retriever.name!r} settings",
+        )
+    except RetrieverContractError:
+        raise
+    except (RecursionError, TypeError, ValueError, OverflowError) as exc:
+        raise RetrieverContractError(
+            f"retriever {retriever.name!r} settings must be JSON-compatible"
+        ) from exc
+    if not isinstance(normalized, dict):
+        raise RetrieverContractError(
+            f"retriever {retriever.name!r} settings must be a mapping"
+        )
+    return normalized
+
+
+def _normalize_retriever_json(value: object, *, location: str) -> JSONValue:
+    """Copy JSON-compatible settings with deterministic mapping ordering."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise RetrieverContractError(f"{location} must not contain NaN or infinity")
+        return value
+    if isinstance(value, Mapping):
+        keys = tuple(value)
+        if not all(isinstance(key, str) for key in keys):
+            raise RetrieverContractError(f"{location} keys must be strings")
+        return {
+            key: _normalize_retriever_json(value[key], location=f"{location}.{key}")
+            for key in sorted(keys)
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _normalize_retriever_json(item, location=f"{location}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    raise RetrieverContractError(
+        f"{location} contains unsupported JSON value type {type(value).__name__}"
+    )
+
+
+def _dense_index_hashes(
+    retrievers: Sequence[BaseRetriever],
+    *,
+    chunk_hash: str,
+) -> dict[str, JSONValue]:
+    """Compute stable cache identities even when cache persistence is disabled."""
+
+    result: dict[str, JSONValue] = {}
+    for identity_key, retriever in _dense_retriever_entries(retrievers):
+        settings = _retriever_settings(retriever)
+        result[identity_key] = dense_index_hash(chunk_hash, settings)
+    return result
+
+
+def _dense_storage_settings(settings: Mapping[str, JSONValue]) -> dict[str, JSONValue]:
+    """Return stable cache-address settings before a lazy model is loaded.
+
+    The resolved revision is validated inside the artifact and participates in
+    the final logical index hash, but it cannot address the artifact because a
+    lazy backend may not know it until document encoding has completed.
+    """
+
+    return {
+        key: settings[key] for key in sorted(settings) if key != "resolved_revision"
+    }
 
 
 __all__ = ["EvaluationRunner"]

@@ -131,6 +131,18 @@ def test_empty_sources_produce_empty_results() -> None:
     assert retriever.search("query", top_k=2) == []
 
 
+def test_index_rejects_invalid_shared_chunks_before_sources_are_called() -> None:
+    first = _FakeRetriever("first")
+    second = _FakeRetriever("second")
+    retriever = HybridRetriever([first, second])
+
+    with pytest.raises(RetrieverContractError, match="Chunk"):
+        retriever.index([cast(Chunk, object())])
+
+    assert first.indexed_chunks is None
+    assert second.indexed_chunks is None
+
+
 @pytest.mark.parametrize(
     "sources, kwargs, match",
     [
