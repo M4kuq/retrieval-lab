@@ -18,6 +18,7 @@ from retrieval_lab import (
     EmbeddingModelMetadata,
     EvaluationQuery,
     EvaluationRunner,
+    HybridRetriever,
     KeywordRetriever,
     SearchResult,
 )
@@ -246,6 +247,33 @@ def test_runner_evaluates_keyword_bm25_and_dense_on_shared_chunks() -> None:
     dense_settings = result.manifest["retriever_settings"]["dense"]
     assert dense_settings["model_id"] == "runner-fake"
     assert dense_settings["resolved_revision"] == "resolved"
+
+
+def test_runner_evaluates_keyword_bm25_dense_and_hybrid_on_shared_chunks() -> None:
+    bm25 = BM25Retriever()
+    dense = DenseRetriever(backend=_RunnerEmbeddingBackend())
+    hybrid = HybridRetriever([bm25, dense], candidate_k=3)
+    result = EvaluationRunner(
+        documents=[
+            Document(id="a", text="shared relevant"),
+            Document(id="b", text="shared unrelated"),
+        ],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="shared",
+                relevant_document_ids={"a"},
+            )
+        ],
+        retrievers=[KeywordRetriever(), bm25, dense, hybrid],
+        top_k=[1, 2],
+    ).run()
+
+    assert set(result.metrics) == {"keyword", "bm25", "dense", "hybrid"}
+    assert result.metrics["hybrid"].recall_at(2) == 1.0
+    assert result.manifest["retrievers"] == ["keyword", "bm25", "dense", "hybrid"]
+    assert result.manifest["chunk_hash"]
+    assert result.manifest["retriever_settings"]["hybrid"] == hybrid.settings
 
 
 def test_dense_settings_change_deterministic_run_id() -> None:

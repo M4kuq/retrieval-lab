@@ -7,6 +7,7 @@ from retrieval_lab.retrievers.dense import (
     EmbeddingBackend,
     EmbeddingModelMetadata,
 )
+from retrieval_lab.retrievers.hybrid import HybridRetriever
 from retrieval_lab.retrievers.keyword import KeywordRetriever
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "DenseRetriever",
     "EmbeddingBackend",
     "EmbeddingModelMetadata",
+    "HybridRetriever",
     "KeywordRetriever",
     "Tokenizer",
 ]

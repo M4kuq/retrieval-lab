@@ -5,8 +5,8 @@ RAG retrieval strategies on your own corpus.
 
 The project is currently pre-alpha. The supported local pipeline loads TXT,
 Markdown, and JSONL, validates graded relevance data, and compares deterministic
-Keyword and BM25 retrieval without network access or paid services. Exact dense
-retrieval is available as an optional extra.
+Keyword, BM25, Dense, and RRF Hybrid retrieval without network access or paid
+services. Exact dense retrieval is available as an optional extra.
 
 ## Quick start
 
@@ -104,12 +104,28 @@ loads the model on its first encode operation. You can inject an
 `EmbeddingBackend` to use a custom embedding service without adding a vector
 database dependency.
 
+## Hybrid retrieval
+
+`HybridRetriever` combines two or more indexed `BaseRetriever` instances with
+Reciprocal Rank Fusion. Every source receives the same chunks and candidate
+cutoff; fusion uses source ranks rather than raw scores, with deterministic
+chunk-ID tie-breaking.
+
+```python
+from retrieval_lab import BM25Retriever, DenseRetriever, HybridRetriever
+
+hybrid = HybridRetriever(
+    [BM25Retriever(), DenseRetriever(backend=my_backend)],
+    rrf_k=60,
+    candidate_k=100,
+)
+```
+
 ## Scope
 
-v0.1 focuses on retrieval evaluation. RRF Hybrid, CSV/HTML reports, configuration
-files, CLI commands, and CI regression gates remain under development. Answer
-generation and LLM-based judging are planned only after retrieval evaluation is
-stable.
+v0.1 focuses on retrieval evaluation. CSV/HTML reports, configuration files, CLI
+commands, and CI regression gates remain under development. Answer generation and
+LLM-based judging are planned only after retrieval evaluation is stable.
 
 See `docs/product-plan.md` and `docs/technical-design.md` for the full roadmap and
 contracts.

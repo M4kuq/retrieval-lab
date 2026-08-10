@@ -6,6 +6,7 @@ from retrieval_lab import (
     EmbeddingModelMetadata,
     EvaluationDataset,
     EvaluationRunner,
+    HybridRetriever,
     OptionalDependencyError,
     RetrievalLabError,
     RetrievedQueryResult,
@@ -26,6 +27,7 @@ def test_package_root_and_compatibility_modules_share_public_types() -> None:
 def test_new_milestone_apis_are_available_from_the_package_root() -> None:
     assert BM25Retriever.__module__ == "retrieval_lab.retrievers.bm25"
     assert DenseRetriever.__module__ == "retrieval_lab.retrievers.dense"
+    assert HybridRetriever.__module__ == "retrieval_lab.retrievers.hybrid"
     assert EmbeddingBackend.__module__ == "retrieval_lab.retrievers.dense"
     assert EmbeddingModelMetadata.__module__ == "retrieval_lab.retrievers.dense"
     assert OptionalDependencyError.__module__ == "retrieval_lab.exceptions"
