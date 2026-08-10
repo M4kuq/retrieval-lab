@@ -1,0 +1,80 @@
+name: Release candidate validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release candidate artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install development and documentation checks
+        run: uv sync --extra dev --extra docs
+      - name: Verify lock and quality gates
+        run: |
+          uv lock --check
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy src
+          uv run pytest
+      - name: Build strict documentation
+        run: uv run mkdocs build --strict
+      - name: Build source and wheel distributions
+        run: uv run python -m build --no-isolation
+      - name: Validate distribution metadata and content
+        run: uv run pytest tests/unit/test_packaging.py --no-cov -q
+      - name: Upload release candidate artifacts for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-lab-sdk-0.1.0rc1-dist
+          path: dist/*
+          if-no-files-found: error
+
+  install:
+    name: Install ${{ matrix.variant }} wheel
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [core, dense, docs, all]
+    steps:
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: retrieval-lab-sdk-0.1.0rc1-dist
+          path: dist
+      - name: Install and import the selected variant
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          case "${{ matrix.variant }}" in
+            core) spec="$wheel" ;;
+            dense) spec="${wheel}[dense]" ;;
+            docs) spec="${wheel}[docs]" ;;
+            all) spec="${wheel}[dense,docs,dev]" ;;
+          esac
+          uv venv /tmp/retrieval-lab-rc-install
+          uv pip install --python /tmp/retrieval-lab-rc-install/bin/python "$spec"
+          /tmp/retrieval-lab-rc-install/bin/python -c 'import retrieval_lab; print(retrieval_lab.__name__)'
+          if [[ "${{ matrix.variant }}" =~ ^(dense|all)$ ]]; then
+            /tmp/retrieval-lab-rc-install/bin/python -c 'import sentence_transformers; print(sentence_transformers.__version__)'
+          fi
+          if [[ "${{ matrix.variant }}" =~ ^(docs|all)$ ]]; then
+            /tmp/retrieval-lab-rc-install/bin/python -m mkdocs --version
+          fi

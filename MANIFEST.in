@@ -1,8 +1,18 @@
 include CHANGELOG.md
 include CONTRIBUTING.md
 include SECURITY.md
-recursive-include docs *.md
+global-exclude README.md
+include docs/index.md
+include docs/tutorial.md
+include docs/faq.md
+include docs/api-minimum.md
+include docs/evaluation-spec.md
+include docs/glossary.md
+include docs/ci-regression.md
+include docs/benchmark.md
+include docs/release-notes-0.1.0rc1.md
 recursive-include examples *.json *.jsonl *.md *.py *.yaml *.yml
 recursive-include notebooks *.ipynb
 recursive-include tests *.py
 recursive-include tools *.py
+recursive-include benchmarks *.py

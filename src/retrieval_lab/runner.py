@@ -752,9 +752,9 @@ def _runtime_manifest(
     """Create non-deterministic environment and runtime observations."""
 
     try:
-        retrieval_lab_version = importlib_metadata.version("retrieval-lab")
+        retrieval_lab_version = importlib_metadata.version("retrieval-lab-sdk")
     except importlib_metadata.PackageNotFoundError:
-        retrieval_lab_version = "0.1.0.dev0"
+        retrieval_lab_version = "0.1.0rc1"
     system = platform.system()
     release = platform.release()
     machine = platform.machine()
