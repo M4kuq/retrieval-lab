@@ -303,3 +303,7 @@ methods and `save_csv(output_dir)` use atomic writes. `to_html()` and
 Reports show metrics, latency, warnings, safe normalized configuration fields,
 and attention query IDs, but never query text, retrieved IDs, document text,
 absolute paths, secrets, or external resources.
+
+Saved-run CI usage is documented in `docs/ci-regression.md`. The checked-in
+fixtures and `examples/github-actions/retrieval-quality-gate.yml` show the
+offline `gate` command, baseline artifact contract, and stable exit statuses.

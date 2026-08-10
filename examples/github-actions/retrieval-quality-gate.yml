@@ -1,0 +1,31 @@
+name: Retrieval quality gate example
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Before this workflow runs, publish or download the two schema_version: 1
+# EvaluationResult artifacts at examples/ci/baseline.json and
+# examples/ci/candidate.json. Artifact download is intentionally left to the
+# calling workflow; this example has no secrets, model downloads, or API calls.
+jobs:
+  retrieval-quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra dev
+      - name: Evaluate the saved baseline and candidate
+        run: >-
+          uv run retrieval-lab gate
+          --config examples/ci/retrieval-lab.yaml
+          --baseline examples/ci/baseline.json
+          examples/ci/candidate.json
+          --json

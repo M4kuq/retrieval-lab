@@ -38,6 +38,8 @@ Versioning once the first public release is published.
   initialization, input validation, configured runs, and report persistence.
 - Added thin `inspect`, `compare`, and `gate` CLI commands with deterministic
   text/strict JSON output, query evidence inspection, and stable exit codes.
+- Added offline saved-run regression fixtures, a public GitHub Actions gate
+  example, active CI gate assertions, and wheel/optional-install smoke checks.
 
 ### Migration notes
 

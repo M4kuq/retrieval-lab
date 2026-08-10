@@ -1,0 +1,40 @@
+{
+  "quality_gates": [],
+  "retrievers": {
+    "bm25": {
+      "metrics": {
+        "ap@1": 0.9,
+        "hit_rate@1": 0.9,
+        "mrr@1": 0.9,
+        "ndcg@1": 0.9,
+        "precision@1": 0.9,
+        "recall@1": 0.9
+      },
+      "per_query": [
+        {
+          "metrics": {
+            "ap@1": 0.9,
+            "hit_rate@1": 0.9,
+            "mrr@1": 0.9,
+            "ndcg@1": 0.9,
+            "precision@1": 0.9,
+            "recall@1": 0.9
+          },
+          "query_id": "q-ci-1",
+          "retrieved_ids": ["chunk-ci-1"]
+        }
+      ]
+    }
+  },
+  "run": {
+    "id": "ci-candidate-improved-v1",
+    "manifest": {
+      "dataset_hash": "ci-dataset-v1",
+      "metric_version": 1,
+      "query_ids": ["q-ci-1"],
+      "relevance_level": "document",
+      "top_k": [1]
+    }
+  },
+  "schema_version": 1
+}
