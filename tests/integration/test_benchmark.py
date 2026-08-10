@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import sysconfig
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
@@ -165,7 +166,12 @@ def test_direct_benchmark_script_bootstraps_an_uninstalled_checkout(
     output = tmp_path / "direct.json"
     isolated_python = getattr(sys, "_base_executable", sys.executable)
     environment = os.environ.copy()
-    environment["PYTHONPATH"] = str(tmp_path / "external-only")
+    # Keep installed third-party dependencies such as PyYAML available without
+    # processing the editable install's ``.pth`` file.  The checkout bootstrap
+    # must therefore remain responsible for making ``retrieval_lab`` importable.
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (sysconfig.get_path("purelib"), str(tmp_path / "external-only"))
+    )
     completed = subprocess.run(
         [
             isolated_python,
