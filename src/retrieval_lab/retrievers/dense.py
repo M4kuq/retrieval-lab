@@ -226,6 +226,12 @@ class DenseRetriever(BaseRetriever):
         return "dense"
 
     @property
+    def uses_default_backend(self) -> bool:
+        """Return whether this retriever uses the built-in ST adapter."""
+
+        return isinstance(self._backend, _SentenceTransformersEmbeddingBackend)
+
+    @property
     def settings(self) -> Mapping[str, JSONValue]:
         """Return the deterministic dense configuration for a run manifest."""
 

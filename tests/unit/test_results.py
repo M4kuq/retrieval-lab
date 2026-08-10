@@ -53,6 +53,16 @@ def test_query_evaluation_normalizes_sequences_and_metrics() -> None:
     }
 
 
+def test_query_evaluation_translates_latency_float_overflow() -> None:
+    with pytest.raises(EvaluationError):
+        QueryEvaluation(
+            query_id="q-1",
+            retrieved_ids=(),
+            metrics_by_cutoff={1: {"recall": 0.0}},
+            search_latency_ms=10**10000,
+        )
+
+
 @pytest.mark.parametrize(
     ("retrieved_ids", "error"),
     [

@@ -7,7 +7,7 @@ import builtins
 import math
 from collections.abc import Awaitable, Mapping, Sequence
 from time import perf_counter_ns
-from typing import Protocol, cast, runtime_checkable
+from typing import Protocol, cast
 
 from retrieval_lab.datasets import EvaluationDataset
 from retrieval_lab.domain import (
@@ -32,6 +32,7 @@ from retrieval_lab.retrievers.callable import (
     _build_manifest,
     _evaluation_ids,
     _item_payload,
+    _ranking_signature,
     _utc_timestamp,
     _validate_items,
     _validate_top_k,
@@ -39,7 +40,6 @@ from retrieval_lab.retrievers.callable import (
 )
 
 
-@runtime_checkable
 class AsyncRetriever(Protocol):
     """Minimal asynchronous retrieval protocol for external search systems."""
 
@@ -118,12 +118,13 @@ async def evaluate_async_retrievers(
     Each retriever/query/repetition call receives ``max(top_k)`` and is
     bounded by the shared ``concurrency`` limit.  The first repetition is the
     ranking used for quality metrics; later repetitions must have identical
-    item payloads.  Returned results are ordered by retriever name and dataset
-    query order, regardless of completion order.
+    ranking identity (item IDs, parent IDs, ranks, and order), while scores
+    may vary.  Returned results are ordered by retriever name and dataset query
+    order, regardless of completion order.
 
     This function is an async entry point and must be awaited by the caller.
     It does not create or replace an event loop.  If the awaiting task is
-    externally cancelled, child tasks are cleaned up by ``TaskGroup`` and
+    externally cancelled, worker tasks are cleaned up and
     :class:`asyncio.CancelledError` is re-raised rather than translated.
     """
 
@@ -136,7 +137,6 @@ async def evaluate_async_retrievers(
     normalized_timeout = _validate_timeout(timeout_s)
 
     max_k = max(normalized_top_k)
-    semaphore = asyncio.Semaphore(normalized_concurrency)
     completed: dict[tuple[str, int, int], tuple[tuple[RetrievedItem, ...], float]] = {}
     parent_task = asyncio.current_task()
     started_at = _utc_timestamp()
@@ -148,59 +148,98 @@ async def evaluate_async_retrievers(
         repetition: int,
     ) -> None:
         query = dataset.queries[query_index]
-        async with semaphore:
-            started_ns = perf_counter_ns()
-            try:
-                if normalized_timeout is None:
+        started_ns = perf_counter_ns()
+        try:
+            if normalized_timeout is None:
+                raw_items = await retriever.retrieve(query.query, top_k=max_k)
+            else:
+                async with asyncio.timeout(normalized_timeout):
                     raw_items = await retriever.retrieve(query.query, top_k=max_k)
-                else:
-                    async with asyncio.timeout(normalized_timeout):
-                        raw_items = await retriever.retrieve(query.query, top_k=max_k)
-            except asyncio.CancelledError as exc:
-                if parent_task is not None and parent_task.cancelling():
-                    raise
-                raise RetrieverContractError(
-                    f"retriever {name!r} was cancelled for query {query.id!r}"
-                ) from exc
-            except TimeoutError as exc:
-                raise RetrieverContractError(
-                    f"retriever {name!r} timed out for query {query.id!r}"
-                ) from exc
-            except RetrieverContractError as exc:
-                raise RetrieverContractError(
-                    f"retriever {name!r} failed for query {query.id!r}: {exc}"
-                ) from exc
-            except Exception as exc:
-                raise RetrieverContractError(
-                    f"retriever {name!r} failed for query {query.id!r}"
-                ) from exc
-            finished_ns = perf_counter_ns()
-            if finished_ns < started_ns:
-                raise ConfigurationError("clock readings must be monotonic")
-            try:
-                items = _validate_items(raw_items, top_k=max_k)
-            except RetrieverContractError as exc:
-                raise RetrieverContractError(
-                    f"retriever {name!r} violated the result contract for query "
-                    f"{query.id!r}"
-                ) from exc
-            completed[(name, query_index, repetition)] = (
-                items,
-                float(finished_ns - started_ns) / 1_000_000.0,
-            )
+        except asyncio.CancelledError as exc:
+            if (
+                parent_task is not None
+                and parent_task.cancelling() > parent_cancellation_count
+            ):
+                raise
+            raise RetrieverContractError(
+                f"retriever {name!r} was cancelled for query {query.id!r}"
+            ) from exc
+        except TimeoutError as exc:
+            raise RetrieverContractError(
+                f"retriever {name!r} timed out for query {query.id!r}"
+            ) from exc
+        except RetrieverContractError as exc:
+            raise RetrieverContractError(
+                f"retriever {name!r} failed for query {query.id!r}: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise RetrieverContractError(
+                f"retriever {name!r} failed for query {query.id!r}"
+            ) from exc
+        finished_ns = perf_counter_ns()
+        if finished_ns < started_ns:
+            raise ConfigurationError("clock readings must be monotonic")
+        try:
+            items = _validate_items(raw_items, top_k=max_k)
+        except RetrieverContractError as exc:
+            raise RetrieverContractError(
+                f"retriever {name!r} violated the result contract for query "
+                f"{query.id!r}"
+            ) from exc
+        completed[(name, query_index, repetition)] = (
+            items,
+            float(finished_ns - started_ns) / 1_000_000.0,
+        )
 
+    jobs = iter(
+        (name, retriever, query_index, repetition)
+        for name, retriever in normalized_retrievers
+        for query_index in range(len(dataset.queries))
+        for repetition in range(normalized_repetitions)
+    )
+
+    async def worker() -> None:
+        while True:
+            try:
+                job = next(jobs)
+            except StopIteration:
+                return
+            await run_one(*job)
+
+    job_count = (
+        len(normalized_retrievers) * len(dataset.queries) * normalized_repetitions
+    )
+    worker_count = min(normalized_concurrency, job_count)
+
+    worker_tasks: list[asyncio.Task[None]] = []
+    parent_cancellation_count = (
+        parent_task.cancelling() if parent_task is not None else 0
+    )
     task_error: BaseException | None = None
     try:
-        async with asyncio.TaskGroup() as task_group:
-            for name, retriever in normalized_retrievers:
-                for query_index in range(len(dataset.queries)):
-                    for repetition in range(normalized_repetitions):
-                        task_group.create_task(
-                            run_one(name, retriever, query_index, repetition)
-                        )
+        worker_tasks = [asyncio.create_task(worker()) for _ in range(worker_count)]
+        await asyncio.gather(*worker_tasks)
     except asyncio.CancelledError:
+        for task in worker_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*worker_tasks, return_exceptions=True)
         raise
     except Exception as exc:
+        # A provider can raise while unwinding its cancellation cleanup.  A
+        # gather of the fixed worker set lets us clean up those workers while
+        # retaining the caller's cancellation request, rather than allowing a
+        # cleanup error to replace it as a TaskGroup ExceptionGroup.
+        cancellation_requested = (
+            parent_task is not None
+            and parent_task.cancelling() > parent_cancellation_count
+        )
+        for task in worker_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*worker_tasks, return_exceptions=True)
+        if cancellation_requested:
+            raise asyncio.CancelledError from None
         task_error = _first_task_error(exc)
 
     if task_error is not None:
@@ -225,7 +264,9 @@ async def evaluate_async_retrievers(
             first_items, _ = completed[(name, query_index, 0)]
             for repetition in range(1, normalized_repetitions):
                 repeated_items, _ = completed[(name, query_index, repetition)]
-                if repeated_items != first_items:
+                if _ranking_signature(repeated_items) != _ranking_signature(
+                    first_items
+                ):
                     raise RetrieverContractError(
                         f"retriever {name!r} returned ranking drift for query "
                         f"{query.id!r} across repetitions"
@@ -333,7 +374,12 @@ def _validate_timeout(value: object) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigurationError("timeout_s must be None or a finite positive number")
-    normalized = float(value)
+    try:
+        normalized = float(value)
+    except OverflowError as exc:
+        raise ConfigurationError(
+            "timeout_s must be None or a finite positive number"
+        ) from exc
     if normalized <= 0.0 or not math.isfinite(normalized):
         raise ConfigurationError("timeout_s must be None or a finite positive number")
     return normalized

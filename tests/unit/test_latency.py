@@ -34,6 +34,23 @@ def test_nearest_rank_percentile_rejects_string_values() -> None:
         nearest_rank_percentile("1", 50)  # type: ignore[arg-type]
 
 
+def test_latency_public_helpers_translate_integer_float_overflow() -> None:
+    huge_integer = 10**10000
+
+    with pytest.raises(EvaluationError):
+        nearest_rank_percentile([huge_integer], 50)  # type: ignore[list-item]
+    with pytest.raises(EvaluationError):
+        LatencyStats.from_samples([huge_integer])  # type: ignore[list-item]
+    with pytest.raises(EvaluationError):
+        LatencyStats(
+            mean_ms=huge_integer,
+            p50_ms=0.0,
+            p95_ms=0.0,
+            max_ms=0.0,
+            sample_count=1,
+        )  # type: ignore[arg-type]
+
+
 def test_latency_stats_warns_only_for_small_samples() -> None:
     small = LatencyStats.from_samples([1.0, 2.0])
     large = LatencyStats.from_samples([float(value) for value in range(20)])

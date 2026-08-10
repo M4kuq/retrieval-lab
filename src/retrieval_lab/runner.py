@@ -307,8 +307,23 @@ class EvaluationRunner:
                 + shared_cache_ms
                 + _cached_dense_build_ms(retriever, cache_build_ms)
             )
-            index_size = _index_size_bytes(retriever)
+            try:
+                index_size = _index_size_bytes(retriever)
+            except RetrievalLabError:
+                raise
+            except Exception as exc:
+                raise EvaluationError(
+                    f"retriever {retriever.name!r} failed while measuring index size"
+                ) from exc
             if index_size is not None:
+                if (
+                    isinstance(index_size, bool)
+                    or not isinstance(index_size, int)
+                    or index_size < 0
+                ):
+                    raise EvaluationError(
+                        f"retriever {retriever.name!r} reported an invalid index size"
+                    )
                 index_sizes_bytes[retriever.name] = index_size
 
             samples: list[float] = []
@@ -598,18 +613,23 @@ def _event_duration_ms(event: Mapping[str, JSONValue]) -> float:
 
 
 def _index_size_bytes(retriever: BaseRetriever) -> int | None:
-    """Return exact in-memory vector bytes when a built-in index exposes them."""
+    """Return a deterministic size for indexes owned by built-in retrievers.
 
-    for attribute in ("index_size_bytes", "index_size"):
-        value = getattr(retriever, attribute, None)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            return value
-    if isinstance(retriever, DenseRetriever):
+    Custom ``BaseRetriever`` implementations deliberately have no size probe:
+    arbitrary attribute access could execute provider code and is outside the
+    retriever contract.
+    """
+
+    if type(retriever) is KeywordRetriever:
+        return retriever.index_size_bytes
+    if type(retriever) is BM25Retriever:
+        return retriever.index_size_bytes
+    if type(retriever) is DenseRetriever:
         dimension = retriever._dimension
         if dimension is None:
             return None
         return len(retriever._vectors) * dimension * 8
-    if isinstance(retriever, HybridRetriever):
+    if type(retriever) is HybridRetriever:
         sizes: list[int] = []
         seen: set[int] = set()
         for source in retriever._sources:
@@ -650,10 +670,13 @@ def _optional_dependency_versions(
     """Read metadata versions without importing optional heavy modules."""
 
     used_dense = any(
-        isinstance(retriever, DenseRetriever)
+        (isinstance(retriever, DenseRetriever) and retriever.uses_default_backend)
         or (
             isinstance(retriever, HybridRetriever)
-            and any(isinstance(source, DenseRetriever) for source in retriever._sources)
+            and any(
+                isinstance(source, DenseRetriever) and source.uses_default_backend
+                for source in retriever._sources
+            )
         )
         for retriever in retrievers
     )

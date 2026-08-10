@@ -10,7 +10,11 @@ from itertools import pairwise
 
 from retrieval_lab.exceptions import RetrieverContractError
 from retrieval_lab.models import Chunk, SearchResult
-from retrieval_lab.retrievers.base import BaseRetriever
+from retrieval_lab.retrievers.base import (
+    BaseRetriever,
+    _chunk_payload,
+    _serialized_index_size_bytes,
+)
 
 Tokenizer = Callable[[str], Sequence[str]]
 
@@ -123,6 +127,30 @@ class BM25Retriever(BaseRetriever):
     def name(self) -> str:
         """Return the stable BM25 strategy name."""
         return "bm25"
+
+    @property
+    def index_size_bytes(self) -> int | None:
+        """Return the deterministic logical size of the BM25 index.
+
+        The payload includes both shared chunks and the token frequency tables
+        used for scoring.  It intentionally avoids ``sys.getsizeof`` because
+        Python allocator details are not stable across environments.
+        """
+
+        if self._chunks is None:
+            return None
+        if not self._chunks:
+            return 0
+        payload = {
+            "chunks": [_chunk_payload(chunk) for chunk in self._chunks],
+            "document_frequencies": dict(sorted(self._document_frequencies.items())),
+            "document_lengths": self._document_lengths,
+            "term_frequencies": [
+                dict(sorted(frequencies.items()))
+                for frequencies in self._term_frequencies
+            ],
+        }
+        return _serialized_index_size_bytes(payload)
 
     def _tokenize(self, value: str, *, context: str) -> tuple[str, ...]:
         try:

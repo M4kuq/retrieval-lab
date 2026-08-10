@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from time import perf_counter_ns
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from retrieval_lab.datasets import EvaluationDataset
 from retrieval_lab.domain import (
@@ -60,15 +60,21 @@ class RetrievedItem:
                 "RetrievedItem.parent_document_id must be a non-empty string or None"
             )
         if self.score is not None:
-            if (
-                isinstance(self.score, bool)
-                or not isinstance(self.score, (int, float))
-                or not math.isfinite(float(self.score))
-            ):
+            if isinstance(self.score, bool) or not isinstance(self.score, (int, float)):
                 raise RetrieverContractError(
                     "RetrievedItem.score must be a finite number or None"
                 )
-            object.__setattr__(self, "score", float(self.score))
+            try:
+                normalized_score = float(self.score)
+            except OverflowError as exc:
+                raise RetrieverContractError(
+                    "RetrievedItem.score must be a finite number or None"
+                ) from exc
+            if not math.isfinite(normalized_score):
+                raise RetrieverContractError(
+                    "RetrievedItem.score must be a finite number or None"
+                )
+            object.__setattr__(self, "score", normalized_score)
         if self.rank is not None and (
             isinstance(self.rank, bool)
             or not isinstance(self.rank, int)
@@ -79,7 +85,6 @@ class RetrievedItem:
             )
 
 
-@runtime_checkable
 class Retriever(Protocol):
     """Minimal synchronous retrieval protocol for external search systems."""
 
@@ -345,6 +350,14 @@ def _item_payload(item: RetrievedItem) -> dict[str, JSONValue]:
         "rank": item.rank,
         "score": item.score,
     }
+
+
+def _ranking_signature(
+    items: Sequence[RetrievedItem],
+) -> tuple[tuple[str, str | None, int | None], ...]:
+    """Return ranking identity fields, excluding optional score evidence."""
+
+    return tuple((item.id, item.parent_document_id, item.rank) for item in items)
 
 
 def _with_warnings(

@@ -140,7 +140,12 @@ class LatencyStats:
 def _require_non_negative_float(value: object, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise EvaluationError(f"{field_name} must be a finite non-negative number")
-    normalized = float(value)
+    try:
+        normalized = float(value)
+    except OverflowError as exc:
+        raise EvaluationError(
+            f"{field_name} must be a finite non-negative number"
+        ) from exc
     if not math.isfinite(normalized) or normalized < 0.0:
         raise EvaluationError(f"{field_name} must be a finite non-negative number")
     return normalized

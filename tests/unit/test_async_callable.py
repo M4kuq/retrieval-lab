@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import cast
 
 import pytest
@@ -54,7 +55,7 @@ def _chunk_dataset() -> EvaluationDataset:
     )
 
 
-def test_async_callable_invokes_keyword_top_k_and_is_publicly_typed() -> None:
+def test_async_callable_invokes_keyword_top_k_and_uses_structural_typing() -> None:
     calls: list[tuple[str, int]] = []
 
     async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
@@ -62,7 +63,10 @@ def test_async_callable_invokes_keyword_top_k_and_is_publicly_typed() -> None:
         return [RetrievedItem("second"), RetrievedItem("first")]
 
     retriever = AsyncCallableRetriever("production", search)
-    assert isinstance(retriever, AsyncRetriever)
+    assert retriever.name == "production"
+    assert callable(retriever.retrieve)
+    with pytest.raises(TypeError, match="runtime_checkable"):
+        isinstance(retriever, AsyncRetriever)
     result = _run(retriever.retrieve("query", top_k=2))
     assert [item.id for item in cast(tuple[RetrievedItem, ...], result)] == [
         "second",
@@ -217,6 +221,105 @@ def test_async_evaluation_rejects_ranking_drift() -> None:
         )
 
 
+def test_async_evaluation_allows_score_drift_when_ranking_identity_is_stable() -> None:
+    score = 0.0
+
+    async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        nonlocal score
+        score += 1.0
+        return [
+            RetrievedItem("chunk-a", parent_document_id="doc-a", score=score, rank=1)
+        ]
+
+    result = _run(
+        evaluate_async_retrievers(
+            dataset=_chunk_dataset(),
+            retrievers={"a": AsyncCallableRetriever("a", search)},
+            top_k=[1],
+            repetitions=3,
+        )
+    )
+    assert result.query_results["a"][0].retrieved_ids == ("chunk-a",)  # type: ignore[union-attr]
+
+
+def test_async_external_cancellation_wins_over_provider_cleanup_failure() -> None:
+    started = asyncio.Event()
+
+    async def failing_cleanup(query: str, *, top_k: int) -> list[RetrievedItem]:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            raise RuntimeError("cleanup failed")
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"a": AsyncCallableRetriever("a", failing_cleanup)},
+                top_k=[1],
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    _run(scenario())
+
+
+def test_async_provider_cancellation_after_suppressed_cancel_is_wrapped() -> None:
+    async def provider_cancelled(query: str, *, top_k: int) -> list[RetrievedItem]:
+        raise asyncio.CancelledError
+
+    async def scenario() -> None:
+        parent = asyncio.current_task()
+        assert parent is not None
+        parent.cancel()
+        with suppress(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        try:
+            with pytest.raises(RetrieverContractError, match="was cancelled"):
+                await evaluate_async_retrievers(
+                    dataset=_chunk_dataset(),
+                    retrievers={"a": AsyncCallableRetriever("a", provider_cancelled)},
+                    top_k=[1],
+                )
+        finally:
+            parent.uncancel()
+
+    _run(scenario())
+
+
+def test_async_evaluation_schedules_only_a_fixed_worker_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = 0
+    original_create_task = asyncio.create_task
+
+    def create_task(coroutine: object) -> asyncio.Task[object]:
+        nonlocal created
+        created += 1
+        return original_create_task(coroutine)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(async_callable_module.asyncio, "create_task", create_task)
+
+    async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        await asyncio.sleep(0)
+        return [RetrievedItem("chunk-a")]
+
+    _run(
+        evaluate_async_retrievers(
+            dataset=_chunk_dataset(),
+            retrievers={"a": AsyncCallableRetriever("a", search)},
+            top_k=[1],
+            concurrency=3,
+            repetitions=20,
+        )
+    )
+    assert created == 3
+
+
 @pytest.mark.parametrize(
     ("kwargs", "field"),
     [
@@ -226,6 +329,7 @@ def test_async_evaluation_rejects_ranking_drift() -> None:
         ({"repetitions": False}, "repetitions"),
         ({"timeout_s": 0}, "timeout_s"),
         ({"timeout_s": math.inf}, "timeout_s"),
+        ({"timeout_s": 10**10000}, "timeout_s"),
         ({"timeout_s": True}, "timeout_s"),
     ],
 )

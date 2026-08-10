@@ -152,7 +152,11 @@ def test_search_result_normalizes_numeric_score() -> None:
     assert isinstance(result.score, float)
 
 
-@pytest.mark.parametrize("score", [float("nan"), float("inf"), -float("inf"), True])
+@pytest.mark.parametrize(
+    "score",
+    [float("nan"), float("inf"), -float("inf"), True, 10**10000],
+    ids=["nan", "positive-inf", "negative-inf", "bool", "overflow"],
+)
 def test_search_result_requires_finite_score(score: object) -> None:
     with pytest.raises(RetrieverContractError, match="score"):
         SearchResult(
