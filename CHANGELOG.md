@@ -21,6 +21,8 @@ Versioning once the first public release is published.
 - Shared six-metric evaluation engine and canonical dataset hashing.
 - Search and build latency statistics, reproducibility runtime metadata, and a
   validated default evaluation seed.
+- Immutable typed configuration models, strict schema-versioned YAML loading,
+  and `EvaluationRunner.from_config()` with safe relative-path resolution.
 
 ### Migration notes
 

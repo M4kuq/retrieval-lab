@@ -7,9 +7,11 @@ import platform
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from fnmatch import fnmatchcase
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from time import perf_counter_ns
+from typing import TYPE_CHECKING
 
 from retrieval_lab.artifacts.cache import (
     CacheRead,
@@ -51,6 +53,7 @@ from retrieval_lab.exceptions import (
     EvaluationError,
     RetrievalLabError,
 )
+from retrieval_lab.loaders import load_documents
 from retrieval_lab.retrievers import (
     BaseRetriever,
     BM25Retriever,
@@ -58,6 +61,9 @@ from retrieval_lab.retrievers import (
     HybridRetriever,
     KeywordRetriever,
 )
+
+if TYPE_CHECKING:
+    from retrieval_lab.config import RetrievalConfig
 
 
 class EvaluationRunner:
@@ -75,6 +81,7 @@ class EvaluationRunner:
         chunker: FixedSizeChunker | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
         seed: int = 42,
+        _config_settings: Mapping[str, JSONValue] | None = None,
     ) -> None:
         """Validate an in-memory retrieval experiment."""
 
@@ -118,6 +125,87 @@ class EvaluationRunner:
                 raise ConfigurationError("cache_dir must be a valid path") from exc
             if not str(self._cache_dir):
                 raise ConfigurationError("cache_dir must not be empty")
+        self._config_settings = (
+            plain_json(_config_settings) if _config_settings is not None else None
+        )
+
+    @classmethod
+    def from_config(
+        cls,
+        path: str | os.PathLike[str] | RetrievalConfig,
+    ) -> EvaluationRunner:
+        """Build a runner from a strict YAML file or typed ``RetrievalConfig``.
+
+        YAML paths are resolved relative to the configuration file.  Quality
+        gates and report settings are validated and retained in the manifest,
+        but are not executed by this evaluation API.
+        """
+
+        from retrieval_lab.config import RetrievalConfig, load_config
+
+        config = path if isinstance(path, RetrievalConfig) else load_config(Path(path))
+        return cls._from_typed_config(config)
+
+    @classmethod
+    def _from_typed_config(cls, config: object) -> EvaluationRunner:
+        from retrieval_lab.config import RetrievalConfig
+
+        if not isinstance(config, RetrievalConfig):
+            raise ConfigurationError("config must be a RetrievalConfig")
+        documents = load_documents(config.corpus.path)
+        if config.corpus.include:
+            documents = tuple(
+                document
+                for document in documents
+                if document.source is not None
+                and _matches_include(document.source, config.corpus.include)
+            )
+            if not documents:
+                raise CorpusValidationError(
+                    "corpus.include matched no documents; adjust the configured globs"
+                )
+        dataset = EvaluationDataset.from_jsonl(
+            config.dataset.path,
+            relevance_level=config.dataset.relevance_level,
+        )
+        retriever_by_name: dict[str, BaseRetriever] = {}
+        for item in config.retrievers:
+            if item.type == "keyword":
+                retriever_by_name[item.name] = KeywordRetriever()
+            elif item.type == "bm25":
+                retriever_by_name[item.name] = BM25Retriever(k1=item.k1, b=item.b)
+            elif item.type == "dense":
+                retriever_by_name[item.name] = DenseRetriever(
+                    model_id=item.model,
+                    revision=item.model_revision,
+                    normalize_embeddings=item.normalize_embeddings,
+                    batch_size=item.batch_size,
+                    query_prompt=item.query_prompt,
+                    document_prompt=item.document_prompt,
+                )
+        for item in config.retrievers:
+            if item.type == "hybrid":
+                sources = [retriever_by_name[name] for name in item.sources]
+                retriever_by_name[item.name] = HybridRetriever(
+                    sources,
+                    rrf_k=item.rrf_k,
+                    candidate_k=item.candidate_k,
+                )
+        return cls(
+            documents=documents,
+            dataset=dataset,
+            retrievers=tuple(
+                retriever_by_name[item.name] for item in config.retrievers
+            ),
+            top_k=config.evaluation.top_k,
+            chunker=FixedSizeChunker(
+                size=config.corpus.chunker.size,
+                overlap=config.corpus.chunker.overlap,
+            ),
+            cache_dir=config.cache_dir,
+            seed=config.experiment.seed,
+            _config_settings=config.normalized_settings(),
+        )
 
     @classmethod
     def quick_evaluate(
@@ -277,6 +365,7 @@ class EvaluationRunner:
                 index_sizes_bytes=index_sizes_bytes,
                 cache_events=cache_events,
             ),
+            config_settings=self._config_settings,
         )
         return EvaluationResult(
             run_id=run_id,
@@ -469,6 +558,21 @@ def _validate_documents(documents: Sequence[Document]) -> tuple[Document, ...]:
     if len(set(identifiers)) != len(identifiers):
         raise CorpusValidationError("document IDs must be unique")
     return normalized
+
+
+def _matches_include(source: str, patterns: Sequence[str]) -> bool:
+    """Match POSIX-style corpus globs, including root files under ``**/``."""
+
+    normalized_source = source.replace("\\", "/")
+    for raw_pattern in patterns:
+        pattern = raw_pattern.replace("\\", "/")
+        if fnmatchcase(normalized_source, pattern):
+            return True
+        if pattern.startswith("**/") and fnmatchcase(
+            normalized_source, pattern.removeprefix("**/")
+        ):
+            return True
+    return False
 
 
 def _validate_seed(seed: object) -> int:
@@ -670,6 +774,7 @@ def _build_manifest(
     index_hashes: Mapping[str, JSONValue] | None = None,
     cache_events: Sequence[Mapping[str, JSONValue]] = (),
     runtime: Mapping[str, JSONValue] | None = None,
+    config_settings: Mapping[str, JSONValue] | None = None,
 ) -> tuple[dict[str, JSONValue], str]:
     corpus_payload: list[JSONValue] = []
     for document in documents:
@@ -748,6 +853,8 @@ def _build_manifest(
         }
     if runtime is not None:
         manifest["runtime"] = plain_json(runtime)
+    if config_settings is not None:
+        manifest["config"] = plain_json(config_settings)
     return manifest, run_id
 
 

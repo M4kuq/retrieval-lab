@@ -141,11 +141,54 @@ result = runner.run()
 Cache hit, miss, and rebuild events are recorded under `manifest["runtime"]`
 without changing the deterministic `run_id`.
 
+## Strict YAML configuration
+
+Installations include safe, schema-versioned YAML configuration support. Paths
+are resolved relative to the configuration file; unknown fields, duplicate keys,
+unsafe YAML tags, unsupported retriever settings, and invalid cross-references are
+rejected. Environment variables are never expanded implicitly.
+
+```yaml
+schema_version: 1
+corpus:
+  path: ./examples/corpus
+  include: ["**/*.md"]
+  chunker:
+    type: recursive_characters
+    size: 512
+    overlap: 64
+dataset:
+  path: ./examples/evaluation.jsonl
+  format: native_jsonl
+  relevance_level: document
+retrievers:
+  - name: keyword
+    type: keyword
+  - name: bm25
+    type: bm25
+evaluation:
+  top_k: [1, 3, 5, 10]
+  metrics: [hit_rate, recall, precision, mrr, ndcg, ap]
+  repetitions: 1
+  concurrency: 1
+```
+
+```python
+from retrieval_lab import EvaluationRunner
+
+result = EvaluationRunner.from_config("retrieval-lab.yaml").run()
+```
+
+Built-in names are canonical (`keyword`, `bm25`, `dense`, and `hybrid`) in
+v0.1. YAML uses the dependency-free BM25 tokenizer; custom tokenizers remain
+available through the Python API. Quality-gate and report blocks are validated
+and recorded now, with execution added by their dedicated APIs.
+
 ## Scope
 
-v0.1 focuses on retrieval evaluation. CSV/HTML reports, configuration files, CLI
-commands, and CI regression gates remain under development. Answer generation and
-LLM-based judging are planned only after retrieval evaluation is stable.
+v0.1 focuses on retrieval evaluation. CSV/HTML reports, CLI commands, and CI
+regression gates remain under development. Answer generation and LLM-based judging
+are planned only after retrieval evaluation is stable.
 
 See `docs/product-plan.md` and `docs/technical-design.md` for the full roadmap and
 contracts.
