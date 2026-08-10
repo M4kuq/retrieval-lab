@@ -8,24 +8,22 @@ import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
-from retrieval_lab.application import (
+from retrieval_lab import (
     ComparisonOutput,
+    ConfigurationError,
+    CorpusValidationError,
+    DatasetValidationError,
+    EvaluationError,
     GateOutput,
     InspectionOutput,
+    OptionalDependencyError,
+    RetrievalLabError,
     compare_result_files,
     evaluate_configured_quality_gates,
     initialize_project,
     inspect_result,
     run_configured_experiment,
     validate_config_inputs,
-)
-from retrieval_lab.exceptions import (
-    ConfigurationError,
-    CorpusValidationError,
-    DatasetValidationError,
-    EvaluationError,
-    OptionalDependencyError,
-    RetrievalLabError,
 )
 
 
@@ -222,6 +220,8 @@ def _emit_comparison(output: ComparisonOutput, *, json_output: bool) -> None:
         )
     for issue in comparison.comparability.diagnostics:
         print(f"diagnostic: {issue.field}: {issue.reason}")
+    for issue in comparison.comparability.variable_differences:
+        print(f"experimental_difference: {issue.field}: {issue.reason}")
 
 
 def _emit_gate(output: GateOutput, *, json_output: bool) -> None:

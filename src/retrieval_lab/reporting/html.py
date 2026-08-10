@@ -46,22 +46,26 @@ def _config_view(manifest: Mapping[str, object]) -> dict[str, object]:
         for item in retrievers:
             if not isinstance(item, Mapping):
                 continue
-            selected = {
-                key: item[key]
-                for key in (
-                    "name",
-                    "type",
-                    "batch_size",
-                    "normalize_embeddings",
-                    "k1",
-                    "b",
-                    "rrf_k",
-                    "candidate_k",
-                )
-                if isinstance(item.get(key), (str, int, float, bool))
-            }
-            if selected:
-                selected_retrievers.append(selected)
+            retriever_view: dict[str, object] = {}
+            for key in (
+                "name",
+                "type",
+                "batch_size",
+                "normalize_embeddings",
+                "k1",
+                "b",
+                "rrf_k",
+                "candidate_k",
+            ):
+                value = item.get(key)
+                if isinstance(value, (str, int, float, bool)):
+                    retriever_view[key] = (
+                        safe_identifier(value)
+                        if key == "name" and isinstance(value, str)
+                        else value
+                    )
+            if retriever_view:
+                selected_retrievers.append(retriever_view)
         if selected_retrievers:
             view["retrievers"] = selected_retrievers
     evaluation = raw.get("evaluation")
@@ -88,15 +92,19 @@ def _metric_value(
 
 def _recommendations(result: EvaluationResult) -> str:
     names = sorted(result.metrics)
-    cutoffs = [
-        cutoff for name in names for cutoff in result.metrics[name].metrics_by_cutoff
+    recall_cutoffs = [
+        cutoff
+        for name in names
+        for cutoff, values in result.metrics[name].metrics_by_cutoff.items()
+        if "recall" in values
     ]
-    cutoff = max(cutoffs, default=0)
+    cutoff = max(recall_cutoffs, default=0)
     quality: dict[str, float] = {}
-    for name in names:
-        value = _metric_value(result, name, "recall", cutoff)
-        if value is not None:
-            quality[name] = value
+    if cutoff:
+        for name in names:
+            value = _metric_value(result, name, "recall", cutoff)
+            if value is not None:
+                quality[name] = value
     quality_line = (
         "Data unavailable"
         if not quality
@@ -104,7 +112,13 @@ def _recommendations(result: EvaluationResult) -> str:
         f"(Recall@{cutoff})"
     )
     latency = (
-        {name: result.latency[name].p95_ms for name in names} if result.latency else {}
+        {
+            name: result.latency[name].p95_ms
+            for name in names
+            if result.latency[name].sample_count > 0
+        }
+        if result.latency
+        else {}
     )
     latency_line = (
         "Data unavailable"

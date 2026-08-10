@@ -97,6 +97,29 @@ It accepts a typed `EmbeddingBackend` for custom embedding services. The default
 sentence-transformers adapter is lazy; install it only when needed with
 `pip install retrieval-lab[dense]`.
 
+`HybridRetriever` combines two or more already-configured public retrievers with
+reciprocal-rank fusion (RRF). Its constructor takes a `sources` sequence of
+`BaseRetriever` instances and the positive integer options `rrf_k` (the RRF
+constant, default `60`) and `candidate_k` (the number requested from each source,
+default `100`). `candidate_k` must be at least the evaluation `top_k`. The hybrid
+retriever passes the exact same shared chunk sequence to every source when
+`index(chunks)` is called, then requests each source's ranking with the same
+`candidate_k`; source scores are ignored and one-based ranks are fused
+deterministically. Source names must be unique and nested hybrids are rejected.
+The public constructor and settings are available without optional dependencies:
+
+```python
+from retrieval_lab import BM25Retriever, HybridRetriever, KeywordRetriever
+
+hybrid = HybridRetriever(
+    [KeywordRetriever(), BM25Retriever()],
+    rrf_k=60,
+    candidate_k=100,
+)
+assert hybrid.settings["rrf_k"] == 60
+assert hybrid.settings["candidate_k"] == 100
+```
+
 For an existing search API, use the synchronous callable contract:
 
 ```python
@@ -218,7 +241,11 @@ Results can be loaded through `EvaluationResult.from_dict(payload)`,
 `EvaluationResult.from_json(text)`, `EvaluationResult.load_json(path)`, or the
 package-root alias `load_result(path)`. JSON loading accepts schema version 1,
 rejects duplicate keys, non-finite numbers, malformed metrics, inconsistent
-aggregates, and partial latency data. Unknown additive fields are ignored;
+aggregates, and mixed partial per-query latency data when an aggregate exists.
+Aggregate-only legacy results (all query timing fields absent) remain readable;
+when timing fields are present they must not mix timed and untimed queries.
+`failure_count` records failed calls in the aggregate and does not authorize an
+ambiguous mixed per-query representation. Unknown additive fields are ignored;
 typed non-empty `quality_gates` results are validated and restored as immutable
 records. `load_json` defaults to a 64 MiB file limit.
 
@@ -267,7 +294,8 @@ tracebacks or absolute paths.
 evidence. `inspect`, `compare`, and `gate` accept `--json` for strict,
 machine-readable output and `--debug` to opt into tracebacks. `compare` prints
 baseline/candidate values and absolute/relative deltas, including latency with
-lower-is-better semantics. `gate` returns exit status `1` only when a quality
+lower-is-better semantics, and reports non-blocking experimental variable
+differences. `gate` returns exit status `1` only when a quality
 gate fails; malformed input, incomparable runs, and evaluation errors return
 `2`, while unexpected runtime errors return `3`.
 
@@ -275,7 +303,10 @@ The JSON command shapes are stable: `inspect` returns `command`, `run_id`,
 `schema_version`, `retrievers`, `quality_gates`, and a deterministic `summary`
 (plus `query` with `query_id` and per-retriever `evidence` when requested);
 `compare` returns `baseline_run_id`, `candidate_run_id`, `common_retrievers`,
-`diagnostics`, and metric rows; `gate` returns `candidate_run_id`, optional
+`diagnostics`, `variable_differences`, and metric rows. Experimental-variable
+rows contain only `field` and `reason`; manifest values are intentionally omitted
+so paths, credentials, and other private configuration cannot enter comparison
+output. `gate` returns `candidate_run_id`, optional
 `baseline_run_id`, `passed`, and the canonical `quality_gates` rows.
 
 Saved runs can be compared without re-running retrieval:

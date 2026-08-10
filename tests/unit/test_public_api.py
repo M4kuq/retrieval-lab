@@ -13,6 +13,7 @@ from retrieval_lab import (
     HybridRetriever,
     InitializedProject,
     InspectionOutput,
+    KeywordRetriever,
     OptionalDependencyError,
     QueryEvidence,
     RetrievalLabError,
@@ -50,6 +51,19 @@ def test_new_milestone_apis_are_available_from_the_package_root() -> None:
     assert evaluate_results.__module__ == "retrieval_lab.evaluation.precomputed"
     assert load_documents.__module__ == "retrieval_lab.loaders"
     assert validate_dataset.__module__ == "retrieval_lab.datasets"
+
+
+def test_hybrid_constructor_smoke_uses_public_package_imports() -> None:
+    hybrid = HybridRetriever(
+        [KeywordRetriever(), BM25Retriever()], rrf_k=7, candidate_k=9
+    )
+
+    assert hybrid.settings["rrf_k"] == 7
+    assert hybrid.settings["candidate_k"] == 9
+    assert [entry["name"] for entry in hybrid.settings["sources"]] == [
+        "bm25",
+        "keyword",
+    ]
 
 
 def test_application_services_are_available_from_the_package_root() -> None:

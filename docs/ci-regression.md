@@ -47,12 +47,13 @@ the baseline. The strict comparison fields are dataset hash, relevance level,
 metric version, top-k, query IDs, and per-query metric/cutoff shapes.
 
 The public workflow template at
-`examples/github-actions/retrieval-quality-gate.yml` assumes that a calling
-workflow has already placed baseline and candidate artifacts at the documented
-paths. It has read-only repository permissions and performs no secrets,
-external API calls, or model downloads. The active CI workflow runs one passing
-and one intentionally failing static fixture to keep exit-code behavior
-visible.
+`examples/github-actions/retrieval-quality-gate.yml` can be copied into
+`.github/workflows`; its gate command runs as written against the static baseline
+and improved candidate fixtures under `examples/ci/`. It has read-only repository
+permissions and performs no secrets, external API calls, or model downloads.
+Replace the candidate path or add an artifact-download step when adapting it to
+a project workflow. The active CI workflow runs one passing and one intentionally
+failing static fixture to keep exit-code behavior visible.
 
 For the core wheel smoke test, CI builds and installs the wheel in an isolated
 environment, then runs `init`, `validate`, `run`, and `inspect`. A separate

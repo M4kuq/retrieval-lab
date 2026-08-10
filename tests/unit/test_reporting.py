@@ -15,6 +15,7 @@ from retrieval_lab import (
     load_result,
 )
 from retrieval_lab.exceptions import EvaluationError
+from retrieval_lab.reporting._safety import safe_identifier
 
 
 def _query(query_id: str, value: float, *, timed: bool = True) -> QueryEvaluation:
@@ -261,6 +262,99 @@ def test_reports_redact_absolute_path_identifiers() -> None:
         assert "/private/retriever" not in report
         assert r"C:\private\query" not in report
         assert "[redacted path]" in report
+
+
+def test_path_redaction_is_distinct_and_does_not_collide_with_placeholder() -> None:
+    left = EvaluationResult(
+        run_id="/private/left",
+        metrics={"/private/retriever-left": RetrieverMetrics({1: {"recall": 1.0}})},
+        query_results={
+            "/private/retriever-left": (
+                QueryEvaluation(
+                    query_id="q-left",
+                    retrieved_ids=("doc",),
+                    metrics_by_cutoff={1: {"recall": 1.0}},
+                ),
+            )
+        },
+    )
+    right = EvaluationResult(
+        run_id="/private/right",
+        metrics={"/private/retriever-right": RetrieverMetrics({1: {"recall": 1.0}})},
+        query_results={
+            "/private/retriever-right": (
+                QueryEvaluation(
+                    query_id="q-right",
+                    retrieved_ids=("doc",),
+                    metrics_by_cutoff={1: {"recall": 1.0}},
+                ),
+            )
+        },
+    )
+    left_report = left.to_html()
+    right_report = right.to_html()
+
+    assert left_report != right_report
+    left_token = left_report.split("[redacted path]#", 1)[1].split("]", 1)[0]
+    right_token = right_report.split("[redacted path]#", 1)[1].split("]", 1)[0]
+    assert left_token != right_token
+    assert "/private/left" not in left_report
+    assert "/private/right" not in right_report
+    assert "[redacted path]#" in left_report
+    assert "[redacted path]#" in right_report
+    assert safe_identifier("/private/left") != safe_identifier("[redacted path]")
+
+
+def test_html_sanitizes_path_like_retriever_names_in_configuration() -> None:
+    query = QueryEvaluation(
+        query_id="q",
+        retrieved_ids=("doc",),
+        metrics_by_cutoff={1: {"recall": 1.0}},
+    )
+    result = EvaluationResult(
+        run_id="run",
+        metrics={"/private/retriever": RetrieverMetrics({1: {"recall": 1.0}})},
+        query_results={"/private/retriever": (query,)},
+        manifest={
+            "config": {"retrievers": [{"name": "/private/retriever", "type": "custom"}]}
+        },
+    )
+
+    rendered = result.to_html()
+    assert "/private/retriever" not in rendered
+    assert "[redacted path]#" in rendered
+
+
+def test_html_recommendations_use_recall_cutoffs_and_ignore_empty_latency() -> None:
+    query = QueryEvaluation(
+        query_id="q",
+        retrieved_ids=("doc",),
+        metrics_by_cutoff={1: {"recall": 0.5}, 5: {"precision": 1.0}},
+    )
+    result = EvaluationResult(
+        run_id="run",
+        metrics={
+            "fast-but-empty": RetrieverMetrics(
+                {1: {"recall": 0.4}, 5: {"precision": 1.0}}
+            )
+        },
+        query_results={"fast-but-empty": (query,)},
+        latency={
+            "fast-but-empty": LatencyStats(
+                mean_ms=0.0,
+                p50_ms=0.0,
+                p95_ms=0.0,
+                max_ms=0.0,
+                sample_count=0,
+            )
+        },
+    )
+
+    rendered = result.to_html()
+    assert "Recall@1" in rendered
+    assert "Recall@5" not in rendered
+    assert "<strong>Latency:</strong> Data unavailable" in rendered
+    assert "<strong>Balanced:</strong> Data unavailable" in rendered
 
 
 def test_save_csv_rejects_invalid_output_path() -> None:

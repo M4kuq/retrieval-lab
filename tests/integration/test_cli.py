@@ -121,6 +121,84 @@ def test_inspect_compare_and_gate_exit_codes_and_json(
     assert "Traceback" not in error.err
 
 
+def test_compare_human_output_reports_experimental_differences(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    assert main(["init", str(first)]) == 0
+    capsys.readouterr()
+    assert main(["init", str(second)]) == 0
+    capsys.readouterr()
+    assert main(["run", "-c", str(first / "retrieval-lab.yaml"), "-f", "json"]) == 0
+    capsys.readouterr()
+    assert main(["run", "-c", str(second / "retrieval-lab.yaml"), "-f", "json"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "compare",
+                str(first / "reports/result.json"),
+                str(second / "reports/result.json"),
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "experimental_difference: runtime:" in output
+
+
+def test_compare_json_omits_experimental_manifest_values(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = tmp_path / "project"
+    assert main(["init", str(project)]) == 0
+    capsys.readouterr()
+    config = project / "retrieval-lab.yaml"
+    assert main(["run", "-c", str(config), "-f", "json"]) == 0
+    capsys.readouterr()
+
+    source = project / "reports/result.json"
+    baseline_payload = json.loads(source.read_text(encoding="utf-8"))
+    candidate_payload = json.loads(source.read_text(encoding="utf-8"))
+    baseline_payload["run"]["manifest"]["config"] = {
+        "path": "/private/baseline",
+        "token": "token-value-baseline",
+    }
+    candidate_payload["run"]["manifest"]["config"] = {
+        "path": "/private/candidate",
+        "token": "token-value-candidate",
+    }
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    baseline.write_text(
+        json.dumps(baseline_payload, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    candidate.write_text(
+        json.dumps(candidate_payload, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    assert main(["compare", str(baseline), str(candidate), "--json"]) == 0
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    rows = payload["variable_differences"]
+    assert rows
+    assert all(set(row) == {"field", "reason"} for row in rows)
+    assert any(row["field"] == "config" for row in rows)
+    for sensitive in (
+        "/private/baseline",
+        "/private/candidate",
+        "token-value-baseline",
+        "token-value-candidate",
+    ):
+        assert sensitive not in output
+
+
 def test_gate_failure_is_exit_one_and_debug_is_opt_in(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
