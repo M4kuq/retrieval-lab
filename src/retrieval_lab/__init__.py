@@ -2,6 +2,17 @@
 
 from retrieval_lab.artifacts.results import load_result
 from retrieval_lab.chunkers import FixedSizeChunker
+from retrieval_lab.comparison import (
+    ComparabilityIssue,
+    ComparabilityReport,
+    ComparisonTolerance,
+    MetricComparison,
+    MetricDelta,
+    QueryDeltaExtreme,
+    RunComparison,
+    check_comparability,
+    compare_runs,
+)
 from retrieval_lab.config import (
     BM25RetrieverConfig,
     ChunkerConfig,
@@ -67,6 +78,9 @@ __all__ = [
     "CallableRetriever",
     "Chunk",
     "ChunkerConfig",
+    "ComparabilityIssue",
+    "ComparabilityReport",
+    "ComparisonTolerance",
     "ConfigurationError",
     "CorpusConfig",
     "CorpusValidationError",
@@ -91,8 +105,11 @@ __all__ = [
     "KeywordRetriever",
     "KeywordRetrieverConfig",
     "LatencyStats",
+    "MetricComparison",
+    "MetricDelta",
     "OptionalDependencyError",
     "QualityGateConfig",
+    "QueryDeltaExtreme",
     "QueryEvaluation",
     "RelevanceLevel",
     "ReportConfig",
@@ -103,7 +120,10 @@ __all__ = [
     "Retriever",
     "RetrieverContractError",
     "RetrieverMetrics",
+    "RunComparison",
     "SearchResult",
+    "check_comparability",
+    "compare_runs",
     "evaluate_async_retrievers",
     "evaluate_results",
     "evaluate_retrievers",
