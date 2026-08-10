@@ -25,6 +25,9 @@ Versioning once the first public release is published.
   and `EvaluationRunner.from_config()` with safe relative-path resolution.
 - Synchronous `CallableRetriever`, `RetrievedItem`, and corpus-free
   `evaluate_retrievers()` support for existing search APIs and vector databases.
+- Provider-independent asynchronous retrieval adapters and corpus-free
+  `evaluate_async_retrievers()` with bounded concurrency and cancellation-safe
+  execution.
 
 ### Migration notes
 

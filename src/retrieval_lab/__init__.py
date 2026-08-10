@@ -40,6 +40,8 @@ from retrieval_lab.exceptions import (
 )
 from retrieval_lab.loaders import load_documents
 from retrieval_lab.retrievers import (
+    AsyncCallableRetriever,
+    AsyncRetriever,
     BaseRetriever,
     BM25Retriever,
     CallableRetriever,
@@ -50,11 +52,14 @@ from retrieval_lab.retrievers import (
     KeywordRetriever,
     RetrievedItem,
     Retriever,
+    evaluate_async_retrievers,
     evaluate_retrievers,
 )
 from retrieval_lab.runner import EvaluationRunner
 
 __all__ = [
+    "AsyncCallableRetriever",
+    "AsyncRetriever",
     "BM25Retriever",
     "BM25RetrieverConfig",
     "BaseRetriever",
@@ -98,6 +103,7 @@ __all__ = [
     "RetrieverContractError",
     "RetrieverMetrics",
     "SearchResult",
+    "evaluate_async_retrievers",
     "evaluate_results",
     "evaluate_retrievers",
     "load_config",

@@ -115,6 +115,36 @@ This adapter has no provider SDK dependency and requires no corpus or index.
 Each query is called once at `max(top_k)`; the returned sequence order is the
 ranking order.
 
+For an async provider callable, use the separate async entry point from an
+existing event loop:
+
+```python
+from retrieval_lab import (
+    AsyncCallableRetriever,
+    RetrievedItem,
+    evaluate_async_retrievers,
+)
+
+
+async def search(query, *, top_k):
+    return await provider_search(query, limit=top_k)
+
+
+async_search = AsyncCallableRetriever("production", search)
+result = await evaluate_async_retrievers(
+    dataset=dataset,
+    retrievers={"production": async_search},
+    top_k=[1, 3, 5],
+    concurrency=8,
+)
+```
+
+`evaluate_async_retrievers()` is awaitable and does not create or replace an
+event loop. The synchronous `evaluate_retrievers()` entry point remains
+separate. Repeated async calls must return the same ranking; a timeout or one
+failed query fails the whole evaluation. Caller cancellation is propagated
+after child tasks are cleaned up.
+
 ## Dense retrieval
 
 Install the optional dependency when you want multilingual E5 dense retrieval:
