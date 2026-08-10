@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import subprocess
 import sys
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -145,3 +147,44 @@ def test_benchmark_loader_rejects_duplicate_keys_and_non_finite_constants(
     save_benchmark(payload, output)
     parsed = json.loads(output.read_text(encoding="utf-8"))
     assert parsed["schema_version"] == 1
+
+
+def test_benchmark_loader_rejects_overflowed_numbers(tmp_path: Path) -> None:
+    overflowed = tmp_path / "overflowed.json"
+    overflowed.write_text(
+        '{"schema_version": 1, "duration_ms": 1e400}\n', encoding="utf-8"
+    )
+
+    with pytest.raises(EvaluationError, match="infinity"):
+        load_benchmark(overflowed)
+
+
+def test_direct_benchmark_script_bootstraps_an_uninstalled_checkout(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "direct.json"
+    isolated_python = getattr(sys, "_base_executable", sys.executable)
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(tmp_path / "external-only")
+    completed = subprocess.run(
+        [
+            isolated_python,
+            str(REPOSITORY_ROOT / "benchmarks" / "run.py"),
+            "--size",
+            "small",
+            "--seed",
+            "0",
+            "--output",
+            str(output),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "benchmark report written: direct.json\n"
+    assert completed.stderr == ""
+    assert load_benchmark(output)["benchmark"]["seed"] == 0
