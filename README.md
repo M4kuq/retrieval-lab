@@ -238,11 +238,33 @@ v0.1. YAML uses the dependency-free BM25 tokenizer; custom tokenizers remain
 available through the Python API. Quality-gate and report blocks are validated
 and recorded now, with execution added by their dedicated APIs.
 
+## Result reports
+
+Results can be safely reloaded and rendered without exposing query or document
+text. JSON loading validates schema version 1, rejects duplicate keys and
+non-finite numbers, and limits file loads to 64 MiB by default:
+
+```python
+from retrieval_lab import EvaluationResult, load_result
+
+same_result = load_result("artifacts/result.json")
+# Equivalent: EvaluationResult.load_json("artifacts/result.json")
+print(same_result.summary())
+same_result.save_csv("artifacts/reports")
+same_result.save_html("artifacts/reports/report.html")
+```
+
+`save_summary_csv()` and `save_per_query_csv()` are also available when separate
+paths are preferred. CSV output is UTF-8 long-form data with spreadsheet formula
+injection protection. HTML is a standalone UTF-8 document with inline CSS only;
+it shows metrics, latency, warnings, and a safe allowlist of normalized config
+fields. All save methods use atomic same-directory replacement.
+
 ## Scope
 
-v0.1 focuses on retrieval evaluation. CSV/HTML reports, CLI commands, and CI
-regression gates remain under development. Answer generation and LLM-based judging
-are planned only after retrieval evaluation is stable.
+v0.1 focuses on retrieval evaluation and local JSON/CSV/standalone HTML reports.
+CLI commands and CI regression gates remain under development. Answer generation
+and LLM-based judging are planned only after retrieval evaluation is stable.
 
 See `docs/product-plan.md` and `docs/technical-design.md` for the full roadmap and
 contracts.

@@ -1,5 +1,6 @@
 """Public Python API for Retrieval Lab."""
 
+from retrieval_lab.artifacts.results import load_result
 from retrieval_lab.chunkers import FixedSizeChunker
 from retrieval_lab.config import (
     BM25RetrieverConfig,
@@ -108,5 +109,6 @@ __all__ = [
     "evaluate_retrievers",
     "load_config",
     "load_documents",
+    "load_result",
     "validate_dataset",
 ]

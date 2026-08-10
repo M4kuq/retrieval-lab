@@ -35,6 +35,7 @@ The following names are importable from `retrieval_lab`:
 - `EvaluationRunner`
 - `RetrievalConfig` and its typed nested configuration records
 - `load_config`
+- `load_result`
 - `load_documents`
 - `validate_dataset`
 - `evaluate_results`
@@ -200,4 +201,21 @@ these additive fields are pre-release additions.
 
 `to_dict()`, `to_json()`, and `save_json(path)` use one canonical JSON-compatible
 schema. JSON output is UTF-8, preserves Japanese text, sorts keys, and has a final
-newline. Parent directories are created by `save_json`.
+newline. Parent directories are created by `save_json`, which atomically replaces
+the destination after flushing and syncing a same-directory temporary file.
+
+Results can be loaded through `EvaluationResult.from_dict(payload)`,
+`EvaluationResult.from_json(text)`, `EvaluationResult.load_json(path)`, or the
+package-root alias `load_result(path)`. JSON loading accepts schema version 1,
+rejects duplicate keys, non-finite numbers, malformed metrics, inconsistent
+aggregates, and partial latency data. Unknown additive fields are ignored; the
+non-empty `quality_gates` result form is not loadable until its typed execution
+API exists. `load_json` defaults to a 64 MiB file limit.
+
+`summary()` returns deterministic plain text and never prints. `to_summary_csv()`
+and `to_per_query_csv()` return UTF-8 long-form CSV; the corresponding save
+methods and `save_csv(output_dir)` use atomic writes. `to_html()` and
+`save_html(path)` produce a standalone escaped report with inline CSS only.
+Reports show metrics, latency, warnings, safe normalized configuration fields,
+and attention query IDs, but never query text, retrieved IDs, document text,
+absolute paths, secrets, or external resources.

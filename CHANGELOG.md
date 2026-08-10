@@ -28,6 +28,8 @@ Versioning once the first public release is published.
 - Provider-independent asynchronous retrieval adapters and corpus-free
   `evaluate_async_retrievers()` with bounded concurrency and cancellation-safe
   execution.
+- Safe schema-versioned result reload, atomic JSON/CSV/HTML persistence, and
+  standalone dependency-free reports with formula and HTML injection protection.
 
 ### Migration notes
 
