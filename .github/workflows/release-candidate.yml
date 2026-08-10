@@ -70,10 +70,10 @@ jobs:
             all) spec="${wheel}[dense,docs,dev]" ;;
           esac
           uv venv /tmp/retrieval-lab-rc-install
-          uv pip install +            --python /tmp/retrieval-lab-rc-install/bin/python +            "$spec"
-          /tmp/retrieval-lab-rc-install/bin/python -c +            'import retrieval_lab; print(retrieval_lab.__name__)'
+          uv pip install --python /tmp/retrieval-lab-rc-install/bin/python "$spec"
+          /tmp/retrieval-lab-rc-install/bin/python -c 'import retrieval_lab; print(retrieval_lab.__name__)'
           if [[ "${{ matrix.variant }}" =~ ^(dense|all)$ ]]; then
-            /tmp/retrieval-lab-rc-install/bin/python -c +              'import sentence_transformers; print(sentence_transformers.__version__)'
+            /tmp/retrieval-lab-rc-install/bin/python -c 'import sentence_transformers; print(sentence_transformers.__version__)'
           fi
           if [[ "${{ matrix.variant }}" =~ ^(docs|all)$ ]]; then
             /tmp/retrieval-lab-rc-install/bin/python -m mkdocs --version
