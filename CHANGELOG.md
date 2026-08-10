@@ -19,3 +19,12 @@ Versioning once the first public release is published.
 - Optional exact dense retrieval with typed embedding backends, lazy model loading,
   and reproducible model settings.
 - Shared six-metric evaluation engine and canonical dataset hashing.
+- Search and build latency statistics, reproducibility runtime metadata, and a
+  validated default evaluation seed.
+
+### Migration notes
+
+- Result `schema_version` remains `1` during pre-release development. New
+  runner-produced results include per-retriever `latency` and per-query search
+  timing/warnings, plus runtime-only manifest metadata. Consumers should ignore
+  unknown result fields and continue accepting older results without latency.

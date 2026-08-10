@@ -49,6 +49,8 @@ def evaluate_ranking(
     retrieved_ids: Sequence[str],
     relevance_grades: Mapping[str, int],
     top_k: Sequence[int],
+    search_latency_ms: float | None = None,
+    warnings: Sequence[str] = (),
 ) -> QueryEvaluation:
     """Evaluate one deterministic ranking with every supported metric."""
 
@@ -72,6 +74,8 @@ def evaluate_ranking(
         query_id=query_id,
         retrieved_ids=tuple(retrieved_ids),
         metrics_by_cutoff=metrics_by_cutoff,
+        search_latency_ms=search_latency_ms,
+        warnings=tuple(warnings),
     )
 
 
