@@ -207,6 +207,59 @@ def test_constructor_rejects_non_callable_tokenizer() -> None:
         BM25Retriever(tokenizer=cast("object", "not callable"))
 
 
+def test_custom_tokenizer_closure_state_is_part_of_hashed_identity() -> None:
+    def factory(separator: str):
+        return lambda value: value.split(separator)
+
+    first = BM25Retriever(tokenizer=factory("|"))
+    second = BM25Retriever(tokenizer=factory("/"))
+
+    assert first.settings["tokenizer"] != second.settings["tokenizer"]
+    assert str(first.settings["tokenizer"]).startswith("custom:sha256:")
+    assert "|" not in str(first.settings["tokenizer"])
+
+
+def test_custom_tokenizer_referenced_globals_are_part_of_hashed_identity() -> None:
+    source = "def tokenizer(value):\n    return value.split(MARKER)\n"
+    first_namespace: dict[str, object] = {
+        "__name__": "shared_tokenizer_module",
+        "MARKER": "|",
+    }
+    second_namespace: dict[str, object] = {
+        "__name__": "shared_tokenizer_module",
+        "MARKER": "/",
+    }
+    exec(source, first_namespace)
+    exec(source, second_namespace)
+
+    first = BM25Retriever(tokenizer=first_namespace["tokenizer"])  # type: ignore[arg-type]
+    second = BM25Retriever(tokenizer=second_namespace["tokenizer"])  # type: ignore[arg-type]
+
+    assert first.settings["tokenizer"] != second.settings["tokenizer"]
+
+
+def test_custom_callable_object_requires_explicit_identity() -> None:
+    class StatefulTokenizer:
+        def __call__(self, value: str) -> Sequence[str]:
+            return value.split()
+
+    with pytest.raises(RetrieverContractError, match="tokenizer_identity"):
+        BM25Retriever(tokenizer=StatefulTokenizer())
+
+    retriever = BM25Retriever(
+        tokenizer=StatefulTokenizer(),
+        tokenizer_identity="stateful-v1",
+    )
+    assert str(retriever.settings["tokenizer"]).startswith("custom:sha256:")
+
+
+def test_tokenizer_identity_is_validated_and_only_applies_to_custom_tokenizer() -> None:
+    with pytest.raises(RetrieverContractError, match="non-empty"):
+        BM25Retriever(tokenizer=lambda value: value.split(), tokenizer_identity=" ")
+    with pytest.raises(RetrieverContractError, match="only valid"):
+        BM25Retriever(tokenizer_identity="unexpected")
+
+
 def test_search_requires_index_and_valid_arguments() -> None:
     retriever = BM25Retriever()
 
@@ -285,7 +338,10 @@ def test_tokenizer_exception_during_reindex_is_chained_and_atomic() -> None:
 def test_invalid_tokenizer_results_are_chained_to_contract_error(
     invalid_tokens: Sequence[str],
 ) -> None:
-    retriever = BM25Retriever(tokenizer=lambda _value: invalid_tokens)
+    retriever = BM25Retriever(
+        tokenizer=lambda _value: invalid_tokens,
+        tokenizer_identity=f"invalid-{type(invalid_tokens).__name__}",
+    )
 
     with pytest.raises(RetrieverContractError, match="tokenizer failed") as raised:
         retriever.index([_chunk("chunk", "text")])

@@ -369,6 +369,8 @@ def _query_ids(result: EvaluationResult) -> tuple[str, ...] | None:
     if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
         return None
     values = tuple(raw)
+    if not values:
+        return None
     if any(not isinstance(value, str) or not value.strip() for value in values):
         return None
     if len(set(values)) != len(values):
@@ -381,6 +383,8 @@ def _top_k(result: EvaluationResult) -> tuple[int, ...] | None:
     if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
         return None
     values = tuple(raw)
+    if not values:
+        return None
     if any(
         isinstance(value, bool) or not isinstance(value, int) or value <= 0
         for value in values
@@ -389,6 +393,19 @@ def _top_k(result: EvaluationResult) -> tuple[int, ...] | None:
     if len(set(values)) != len(values):
         return None
     return tuple(sorted(values))
+
+
+def _cutoff_mismatches(
+    result: EvaluationResult,
+    retrievers: Sequence[str],
+    expected: Sequence[int],
+) -> tuple[str, ...]:
+    expected_cutoffs = tuple(expected)
+    return tuple(
+        name
+        for name in retrievers
+        if tuple(sorted(result.metrics[name].metrics_by_cutoff)) != expected_cutoffs
+    )
 
 
 def _metric_shapes(
@@ -434,16 +451,20 @@ def _variable_issues(
     baseline: EvaluationResult,
     candidate: EvaluationResult,
 ) -> tuple[ComparabilityIssue, ...]:
-    fields = (
+    fields = [
         "corpus_hash",
-        "chunk_hash",
         "chunking",
         "retriever_settings",
         "config",
         "seed",
         "runtime",
         "run_id",
-    )
+    ]
+    if (
+        _manifest_value(baseline, "relevance_level") != "chunk"
+        and _manifest_value(candidate, "relevance_level") != "chunk"
+    ):
+        fields.insert(1, "chunk_hash")
     differences: list[ComparabilityIssue] = []
     for field in fields:
         baseline_value: object = (
@@ -476,6 +497,9 @@ def check_comparability(
         raise EvaluationError("candidate must be an EvaluationResult")
 
     issues: list[ComparabilityIssue] = []
+    baseline_names = set(baseline.metrics)
+    candidate_names = set(candidate.metrics)
+    common = tuple(sorted(baseline_names & candidate_names))
     for field in _STRICT_FIELDS:
         left = _manifest_value(baseline, field)
         right = _manifest_value(candidate, field)
@@ -499,6 +523,26 @@ def check_comparability(
                             "manifest.top_k", "invalid in candidate", left, right
                         )
                     )
+                elif _cutoff_mismatches(baseline, common, left_normalized):
+                    issues.append(
+                        _strict_issue(
+                            "manifest.top_k",
+                            "does not match every baseline common retriever cutoff set",
+                            left_normalized,
+                            list(_cutoff_mismatches(baseline, common, left_normalized)),
+                        )
+                    )
+                elif _cutoff_mismatches(candidate, common, right_normalized):
+                    issues.append(
+                        _strict_issue(
+                            "manifest.top_k",
+                            "does not match candidate common retriever cutoffs",
+                            right_normalized,
+                            list(
+                                _cutoff_mismatches(candidate, common, right_normalized)
+                            ),
+                        )
+                    )
                 elif left_normalized != right_normalized:
                     issues.append(
                         _strict_issue(
@@ -508,31 +552,94 @@ def check_comparability(
                             right_normalized,
                         )
                     )
-            else:
-                if field == "metric_version":
-                    valid_left = (
-                        isinstance(left, int)
-                        and not isinstance(left, bool)
-                        and left > 0
-                    )
-                    valid_right = (
-                        isinstance(right, int)
-                        and not isinstance(right, bool)
-                        and right > 0
-                    )
-                    if not valid_left or not valid_right:
-                        issues.append(
-                            _strict_issue(
-                                f"manifest.{field}",
-                                "must be a positive integer",
-                                left,
-                                right,
-                            )
-                        )
-                if left != right:
+            elif field == "dataset_hash":
+                valid_left = isinstance(left, str) and bool(left.strip())
+                valid_right = isinstance(right, str) and bool(right.strip())
+                if not valid_left or not valid_right:
                     issues.append(
-                        _strict_issue(f"manifest.{field}", "values differ", left, right)
+                        _strict_issue(
+                            "manifest.dataset_hash",
+                            "must be a non-empty string",
+                            left,
+                            right,
+                        )
                     )
+                elif left != right:
+                    issues.append(
+                        _strict_issue(
+                            "manifest.dataset_hash", "values differ", left, right
+                        )
+                    )
+            elif field == "relevance_level":
+                valid_left = left in ("document", "chunk")
+                valid_right = right in ("document", "chunk")
+                if not valid_left or not valid_right:
+                    issues.append(
+                        _strict_issue(
+                            "manifest.relevance_level",
+                            "must be 'document' or 'chunk'",
+                            left,
+                            right,
+                        )
+                    )
+                elif left != right:
+                    issues.append(
+                        _strict_issue(
+                            "manifest.relevance_level", "values differ", left, right
+                        )
+                    )
+            else:
+                valid_left = (
+                    isinstance(left, int) and not isinstance(left, bool) and left > 0
+                )
+                valid_right = (
+                    isinstance(right, int) and not isinstance(right, bool) and right > 0
+                )
+                if not valid_left or not valid_right:
+                    issues.append(
+                        _strict_issue(
+                            "manifest.metric_version",
+                            "must be a positive integer",
+                            left,
+                            right,
+                        )
+                    )
+                elif left != right:
+                    issues.append(
+                        _strict_issue(
+                            "manifest.metric_version", "values differ", left, right
+                        )
+                    )
+
+    left_relevance = _manifest_value(baseline, "relevance_level")
+    right_relevance = _manifest_value(candidate, "relevance_level")
+    if left_relevance == "chunk" or right_relevance == "chunk":
+        left_chunk_hash = _manifest_value(baseline, "chunk_hash")
+        right_chunk_hash = _manifest_value(candidate, "chunk_hash")
+        valid_left_hash = isinstance(left_chunk_hash, str) and bool(
+            left_chunk_hash.strip()
+        )
+        valid_right_hash = isinstance(right_chunk_hash, str) and bool(
+            right_chunk_hash.strip()
+        )
+        if not valid_left_hash or not valid_right_hash:
+            issues.append(
+                _strict_issue(
+                    "manifest.chunk_hash",
+                    "chunk relevance requires a non-empty chunk hash",
+                    left_chunk_hash,
+                    right_chunk_hash,
+                )
+            )
+        elif left_chunk_hash != right_chunk_hash:
+            issues.append(
+                _strict_issue(
+                    "manifest.chunk_hash",
+                    "values differ for chunk relevance",
+                    left_chunk_hash,
+                    right_chunk_hash,
+                )
+            )
 
     baseline_query_ids = _query_ids(baseline)
     candidate_query_ids = _query_ids(candidate)
@@ -558,9 +665,6 @@ def check_comparability(
             )
         )
 
-    baseline_names = set(baseline.metrics)
-    candidate_names = set(candidate.metrics)
-    common = tuple(sorted(baseline_names & candidate_names))
     added = tuple(sorted(candidate_names - baseline_names))
     removed = tuple(sorted(baseline_names - candidate_names))
     if not common:
@@ -944,8 +1048,12 @@ def compare_runs(
                         cutoff=None,
                         baseline_value=_latency_value(baseline, retriever, metric),
                         candidate_value=_latency_value(candidate, retriever, metric),
-                        baseline_queries=baseline_queries,
-                        candidate_queries=candidate_queries,
+                        baseline_queries=(
+                            baseline_queries if metric == "latency_mean_ms" else None
+                        ),
+                        candidate_queries=(
+                            candidate_queries if metric == "latency_mean_ms" else None
+                        ),
                         tolerance=checked_tolerance,
                     )
                 )

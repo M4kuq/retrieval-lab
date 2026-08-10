@@ -49,6 +49,7 @@ def _chunk(identifier: str = "chunk") -> Chunk:
 
 class _Backend:
     def __init__(self, *, model_id: str = "fake/model", revision: str = "rev") -> None:
+        self.cache_identity = {"model_id": model_id, "revision": revision}
         self.metadata = EmbeddingModelMetadata(
             model_id=model_id,
             requested_revision=revision,
@@ -64,6 +65,74 @@ class _Backend:
     ) -> Sequence[Sequence[float]]:
         self.calls.append(tuple(texts))
         return [[1.0, 0.0] for _ in texts]
+
+
+class _IdentityBackend(_Backend):
+    def __init__(self, identity: str) -> None:
+        super().__init__()
+        self.cache_identity = identity
+
+
+class _LazyRevisionBackend:
+    cache_identity = "lazy-revision-v1"
+
+    def __init__(self) -> None:
+        self.metadata = EmbeddingModelMetadata(
+            model_id="fake/lazy",
+            requested_revision="main",
+        )
+        self.calls: list[tuple[str, ...]] = []
+
+    def encode(
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int,
+    ) -> Sequence[Sequence[float]]:
+        requested = tuple(texts)
+        self.calls.append(requested)
+        self.metadata = EmbeddingModelMetadata(
+            model_id="fake/lazy",
+            requested_revision="main",
+            resolved_revision="f" * 40,
+        )
+        return [[1.0, 0.0] for _ in texts]
+
+
+class _MutableIdentityBackend:
+    def __init__(self) -> None:
+        self.revision = "r1"
+        self.calls: list[tuple[str, ...]] = []
+
+    @property
+    def cache_identity(self) -> str:
+        return self.revision
+
+    @property
+    def metadata(self) -> EmbeddingModelMetadata:
+        return EmbeddingModelMetadata(
+            model_id="fake/mutable",
+            requested_revision="main",
+            resolved_revision=self.revision,
+        )
+
+    def encode(
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int,
+    ) -> Sequence[Sequence[float]]:
+        requested = tuple(texts)
+        self.calls.append(requested)
+        vectors: list[list[float]] = []
+        for text in texts:
+            if text.startswith("query: ") or ("first" in text) == (
+                self.revision == "r1"
+            ):
+                vectors.append([1.0, 0.0])
+            else:
+                vectors.append([0.0, 1.0])
+        return vectors
 
 
 def _experiment(
@@ -325,6 +394,18 @@ def test_atomic_write_replaces_from_the_same_directory(
     assert not calls[0][0].exists()
 
 
+def test_cache_parent_creation_failures_are_typed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_mkdir(*args: object, **kwargs: object) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+    with pytest.raises(EvaluationError, match="atomically write"):
+        write_chunk_artifact(tmp_path / "cache", "a" * 64, [_chunk()])
+
+
 def test_chunk_cache_distinguishes_missing_corrupt_and_unknown_schema(
     tmp_path: Path,
 ) -> None:
@@ -505,6 +586,17 @@ def test_runner_dense_cache_hit_skips_document_encode_and_keeps_run_id(
     assert str(tmp_path) not in second.to_json()  # type: ignore[union-attr]
 
 
+def test_custom_backend_identity_prevents_dense_cache_reuse(tmp_path: Path) -> None:
+    first_backend = _IdentityBackend("first")
+    _experiment(tmp_path, first_backend)
+    second_backend = _IdentityBackend("second")
+    result = _experiment(tmp_path, second_backend)
+
+    assert len(second_backend.calls) == 2
+    event = result.manifest["runtime"]["cache_events"][1]  # type: ignore[index]
+    assert event["status"] != "hit"  # type: ignore[index]
+
+
 @pytest.mark.parametrize("change", ["corpus", "prompt", "revision"])
 def test_dense_cache_key_changes_when_reproducibility_inputs_change(
     tmp_path: Path,
@@ -582,6 +674,63 @@ def test_shared_dense_instance_inside_hybrid_is_encoded_once(tmp_path: Path) -> 
     ).run()
     assert result.run_id
     assert backend.calls.count(("passage: chunk text",)) == 1
+
+
+def test_lazy_resolved_revision_uses_stable_storage_key_and_logical_hash(
+    tmp_path: Path,
+) -> None:
+    first_backend = _LazyRevisionBackend()
+    first = _experiment(tmp_path, first_backend)
+    first_event = first.manifest["runtime"]["cache_events"][1]  # type: ignore[index]
+
+    second_backend = _LazyRevisionBackend()
+    second = _experiment(tmp_path, second_backend)
+    second_event = second.manifest["runtime"]["cache_events"][1]  # type: ignore[index]
+
+    assert first_event["status"] == "miss"
+    assert second_event["status"] == "hit"
+    assert first_event["storage_index_hash"] == second_event["storage_index_hash"]
+    assert first_event["index_hash"] == first.manifest["index_hashes"]["dense"]  # type: ignore[index]
+    assert second_event["index_hash"] == second.manifest["index_hashes"]["dense"]  # type: ignore[index]
+    assert first_event["storage_index_hash"] != first_event["index_hash"]
+    assert first.run_id == second.run_id
+    assert first_backend.calls == [
+        ("passage: chunk text",),
+        ("query: find",),
+    ]
+    assert second_backend.calls == [("query: find",)]
+
+
+def test_same_dense_instance_reindexes_when_backend_identity_changes(
+    tmp_path: Path,
+) -> None:
+    backend = _MutableIdentityBackend()
+    dense = DenseRetriever(backend=backend)
+    runner = EvaluationRunner(
+        documents=[
+            Document(id="first", text="first"),
+            Document(id="second", text="second"),
+        ],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="find",
+                relevant_document_ids={"second"},
+            )
+        ],
+        retrievers=[dense],
+        top_k=[1],
+        cache_dir=tmp_path,
+    )
+
+    first = runner.run()
+    backend.revision = "r2"
+    second = runner.run()
+
+    assert first.query_results["dense"][0].retrieved_ids == ("first",)
+    assert second.query_results["dense"][0].retrieved_ids == ("second",)
+    assert backend.calls.count(("passage: first", "passage: second")) == 2
+    assert first.run_id != second.run_id
 
 
 def test_hybrid_build_time_includes_cached_dense_preparation(

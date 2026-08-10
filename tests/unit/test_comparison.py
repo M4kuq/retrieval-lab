@@ -183,6 +183,66 @@ def test_missing_strict_fields_are_all_blocking() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"dataset_hash": 1},
+        {"dataset_hash": ""},
+        {"relevance_level": "bogus"},
+        {"metric_version": True},
+        {"top_k": []},
+        {"top_k": [99]},
+        {"query_ids": []},
+    ],
+)
+def test_matching_malformed_strict_manifest_values_are_blocking(
+    manifest: Mapping[str, object],
+) -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)}, manifest=manifest)
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)}, manifest=manifest)
+
+    report = check_comparability(baseline, candidate)
+
+    assert not report.comparable
+    with pytest.raises(IncomparableRunError):
+        compare_runs(baseline, candidate)
+
+
+def test_chunk_relevance_requires_matching_chunk_hashes() -> None:
+    baseline = _result(
+        {"bm25": (0.2, 0.4, 0.6)},
+        manifest={"relevance_level": "chunk", "chunk_hash": "chunk-a"},
+    )
+    same = _result(
+        {"bm25": (0.2, 0.4, 0.6)},
+        manifest={"relevance_level": "chunk", "chunk_hash": "chunk-a"},
+    )
+    different = _result(
+        {"bm25": (0.2, 0.4, 0.6)},
+        manifest={"relevance_level": "chunk", "chunk_hash": "chunk-b"},
+    )
+    missing = _result(
+        {"bm25": (0.2, 0.4, 0.6)},
+        manifest={"relevance_level": "chunk"},
+    )
+
+    assert check_comparability(baseline, same).comparable
+    for candidate in (different, missing):
+        report = check_comparability(baseline, candidate)
+        assert not report.comparable
+        assert any(issue.field == "manifest.chunk_hash" for issue in report.issues)
+
+
+def test_document_relevance_keeps_chunk_hash_as_experimental_variable() -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"chunk_hash": "chunk-a"})
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"chunk_hash": "chunk-b"})
+
+    report = check_comparability(baseline, candidate)
+
+    assert report.comparable
+    assert any(item.field == "chunk_hash" for item in report.variable_differences)
+
+
 def test_baseline_zero_relative_delta_is_explicit() -> None:
     baseline = _result({"bm25": (0.0, 0.0, 0.0)})
     candidate = _result({"bm25": (0.0, 0.2, 0.4)})
@@ -247,6 +307,9 @@ def test_latency_is_lower_is_better_and_missing_latency_is_diagnostic() -> None:
     assert latency.aggregate.absolute_delta == -2.0
     assert latency.aggregate.direction == "lower_is_better"
     assert latency.aggregate.classification == "improved"
+    assert latency.query_deltas == ()
+    assert latency.best is None
+    assert latency.worst is None
 
     missing = _result({"bm25": (0.2, 0.4, 0.6)})
     report = check_comparability(baseline, missing)
@@ -257,6 +320,52 @@ def test_latency_is_lower_is_better_and_missing_latency_is_diagnostic() -> None:
         item.metric == "recall"
         for item in compare_runs(baseline, missing).metrics["bm25"]
     )
+
+
+def test_latency_percentiles_do_not_reuse_per_query_mean_deltas() -> None:
+    def with_query_latency(
+        result: EvaluationResult, values: Sequence[float]
+    ) -> EvaluationResult:
+        queries = tuple(
+            QueryEvaluation(
+                query_id=query.query_id,
+                retrieved_ids=query.retrieved_ids,
+                metrics_by_cutoff=query.metrics_by_cutoff,
+                search_latency_ms=value,
+                warnings=query.warnings,
+            )
+            for query, value in zip(result.query_results["bm25"], values, strict=True)
+        )
+        return EvaluationResult(
+            run_id=result.run_id,
+            metrics=result.metrics,
+            query_results={"bm25": queries},
+            manifest=result.manifest,
+            latency=result.latency,
+        )
+
+    baseline = with_query_latency(
+        _result({"bm25": (0.2, 0.4, 0.6)}, latency=True),
+        (1.0, 2.0, 3.0),
+    )
+    candidate = with_query_latency(
+        _result({"bm25": (0.2, 0.4, 0.6)}, latency=True),
+        (3.0, 2.0, 1.0),
+    )
+
+    latency_rows = [
+        item
+        for item in compare_runs(baseline, candidate).metrics["bm25"]
+        if item.metric.startswith("latency_")
+    ]
+
+    assert latency_rows
+    mean = next(item for item in latency_rows if item.metric == "latency_mean_ms")
+    percentiles = [item for item in latency_rows if item.metric != "latency_mean_ms"]
+    assert len(mean.query_deltas) == 3
+    assert mean.best is not None and mean.worst is not None
+    assert all(item.query_deltas == () for item in percentiles)
+    assert all(item.best is None and item.worst is None for item in percentiles)
 
 
 def test_metric_shape_mismatch_is_blocking() -> None:

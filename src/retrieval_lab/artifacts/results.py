@@ -333,12 +333,41 @@ def _parse_query(value: object, path: str) -> QueryEvaluation:
     ):
         raise EvaluationError(f"{path}.warnings must be a list of strings")
     warnings = tuple(_string(item, f"{path}.warnings[]") for item in warnings_value)
+    raw_cutoff_evidence = mapping.get("retrieved_ids_by_cutoff")
+    cutoff_evidence: dict[int, tuple[str, ...]] | None = None
+    if raw_cutoff_evidence is not None:
+        evidence_mapping = _mapping(
+            raw_cutoff_evidence, f"{path}.retrieved_ids_by_cutoff"
+        )
+        cutoff_evidence = {}
+        for raw_cutoff, raw_ids in evidence_mapping.items():
+            try:
+                cutoff = int(raw_cutoff)
+            except (OverflowError, ValueError) as exc:
+                raise EvaluationError(
+                    f"{path}.retrieved_ids_by_cutoff keys must be canonical "
+                    "positive integers"
+                ) from exc
+            if str(cutoff) != raw_cutoff or cutoff <= 0:
+                raise EvaluationError(
+                    f"{path}.retrieved_ids_by_cutoff keys must be canonical "
+                    "positive integers"
+                )
+            if isinstance(raw_ids, (str, bytes)) or not isinstance(raw_ids, Sequence):
+                raise EvaluationError(
+                    f"{path}.retrieved_ids_by_cutoff[{raw_cutoff}] must be a list"
+                )
+            cutoff_evidence[cutoff] = tuple(
+                _string(item, f"{path}.retrieved_ids_by_cutoff[{raw_cutoff}][]")
+                for item in raw_ids
+            )
     return QueryEvaluation(
         query_id=_string(mapping["query_id"], f"{path}.query_id"),
         retrieved_ids=retrieved_ids,
         metrics_by_cutoff=_flattened_metrics(mapping["metrics"], f"{path}.metrics"),
         search_latency_ms=search_latency,
         warnings=warnings,
+        retrieved_ids_by_cutoff=cutoff_evidence,
     )
 
 

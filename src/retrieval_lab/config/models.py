@@ -51,7 +51,10 @@ def _non_negative(value: object, field_name: str) -> int:
 def _finite(value: object, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigurationError(f"{field_name} must be a finite number")
-    normalized = float(value)
+    try:
+        normalized = float(value)
+    except OverflowError as exc:
+        raise ConfigurationError(f"{field_name} must be a finite number") from exc
     if not math.isfinite(normalized):
         raise ConfigurationError(f"{field_name} must be a finite number")
     return normalized
@@ -74,7 +77,12 @@ def _quality_metric(value: str) -> None:
     name, raw_cutoff = value.split("@")
     if name not in SUPPORTED_METRICS or not raw_cutoff.isdecimal():
         raise ConfigurationError("quality_gates.metric is not supported")
-    cutoff = int(raw_cutoff)
+    try:
+        cutoff = int(raw_cutoff)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "quality_gates.metric cutoff must be a canonical positive integer"
+        ) from exc
     if cutoff <= 0 or raw_cutoff != str(cutoff):
         raise ConfigurationError(
             "quality_gates.metric cutoff must be canonical positive integer"
@@ -271,6 +279,7 @@ class HybridRetrieverConfig:
             raise ConfigurationError("retriever.sources must contain non-empty strings")
         if len(set(self.sources)) != len(self.sources):
             raise ConfigurationError("retriever.sources must not contain duplicates")
+        object.__setattr__(self, "sources", tuple(self.sources))
         _positive(self.rrf_k, "retriever.rrf_k")
         _positive(self.candidate_k, "retriever.candidate_k")
 

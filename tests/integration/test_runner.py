@@ -22,6 +22,7 @@ from retrieval_lab import (
     EvaluationRunner,
     HybridRetriever,
     KeywordRetriever,
+    RetrieverContractError,
     SearchResult,
 )
 
@@ -83,6 +84,7 @@ def test_runner_macro_averages_queries_and_normalizes_cutoffs() -> None:
 class _CountingRetriever(BaseRetriever):
     def __init__(self) -> None:
         self.search_cutoffs: list[int] = []
+        self.index_calls = 0
         self._chunks: tuple[Chunk, ...] = ()
 
     @property
@@ -90,6 +92,7 @@ class _CountingRetriever(BaseRetriever):
         return "counting"
 
     def index(self, chunks: Sequence[Chunk]) -> None:
+        self.index_calls += 1
         self._chunks = tuple(chunks)
 
     def search(self, query: str, top_k: int) -> list[SearchResult]:
@@ -114,6 +117,36 @@ class _FailingRetriever(_CountingRetriever):
 
     def search(self, query: str, top_k: int) -> list[SearchResult]:
         raise RuntimeError("provider secret must remain chained, not serialized")
+
+
+class _BadSettingsRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "bad-settings"
+
+    @property
+    def settings(self) -> dict[object, object]:
+        return {"nested": {1: "not a JSON object key"}}
+
+
+class _SecondCountingRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "second"
+
+
+class _DuplicateDocumentRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "duplicate-documents"
+
+    def search(self, query: str, top_k: int) -> list[SearchResult]:
+        self.search_cutoffs.append(top_k)
+        return [
+            SearchResult("a-1", "doc-a", "a1", 3.0, 1),
+            SearchResult("a-2", "doc-a", "a2", 2.0, 2),
+            SearchResult("b-1", "doc-b", "b1", 1.0, 3),
+        ][:top_k]
 
 
 class _NoSizeProbeRetriever(_CountingRetriever):
@@ -148,6 +181,83 @@ def test_runner_searches_once_at_max_k_and_accepts_custom_retriever() -> None:
 
     assert retriever.search_cutoffs == [3]
     assert result.metrics["counting"].recall_at(1) == 1.0
+
+
+def test_runner_document_metrics_are_invariant_when_adding_a_cutoff() -> None:
+    documents = [Document(id="doc-a", text="a"), Document(id="doc-b", text="b")]
+    queries = [
+        EvaluationQuery(
+            id="query",
+            query="anything",
+            relevant_document_ids={"doc-b"},
+        )
+    ]
+    narrow_retriever = _DuplicateDocumentRetriever()
+    wide_retriever = _DuplicateDocumentRetriever()
+
+    narrow = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[narrow_retriever],
+        top_k=[2],
+    ).run()
+    wide = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[wide_retriever],
+        top_k=[2, 3],
+    ).run()
+
+    assert narrow_retriever.search_cutoffs == [2]
+    assert wide_retriever.search_cutoffs == [3]
+    assert narrow.metrics["duplicate-documents"].recall_at(2) == 0.0
+    assert wide.metrics["duplicate-documents"].recall_at(2) == 0.0
+    assert wide.metrics["duplicate-documents"].recall_at(3) == 1.0
+    evidence = wide.query_results["duplicate-documents"][0]
+    assert evidence.retrieved_ids == ("doc-a", "doc-b")
+    assert evidence.retrieved_ids_by_cutoff == {
+        2: ("doc-a",),
+        3: ("doc-a", "doc-b"),
+    }
+
+
+def test_runner_rejects_non_json_custom_settings_with_typed_error() -> None:
+    with pytest.raises(RetrieverContractError, match="keys must be strings"):
+        EvaluationRunner(
+            documents=[Document(id="doc", text="relevant")],
+            queries=[
+                EvaluationQuery(
+                    id="query",
+                    query="anything",
+                    relevant_document_ids={"doc"},
+                )
+            ],
+            retrievers=[_BadSettingsRetriever()],
+            top_k=[1],
+        ).run()
+
+
+def test_runner_indexes_shared_hybrid_source_once() -> None:
+    shared = _CountingRetriever()
+    second = _SecondCountingRetriever()
+    hybrid = HybridRetriever([shared, second], candidate_k=1)
+
+    result = EvaluationRunner(
+        documents=[Document(id="doc", text="relevant")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="anything",
+                relevant_document_ids={"doc"},
+            )
+        ],
+        retrievers=[shared, hybrid],
+        top_k=[1],
+    ).run()
+
+    assert set(result.metrics) == {"counting", "hybrid"}
+    assert shared.index_calls == 1
+    assert second.index_calls == 1
 
 
 def test_runner_does_not_probe_undeclared_custom_index_size_attributes() -> None:
@@ -358,6 +468,7 @@ def test_identical_inputs_produce_identical_result_json() -> None:
 
 
 class _RunnerEmbeddingBackend:
+    cache_identity = "runner-fake-v1"
     metadata = EmbeddingModelMetadata(
         model_id="runner-fake",
         requested_revision="requested",
@@ -376,6 +487,10 @@ class _RunnerEmbeddingBackend:
             else [0.0, 1.0]
             for text in texts
         ]
+
+
+class _AlternateRunnerEmbeddingBackend(_RunnerEmbeddingBackend):
+    pass
 
 
 def test_runner_evaluates_keyword_bm25_and_dense_on_shared_chunks() -> None:
@@ -486,3 +601,123 @@ def test_dense_settings_change_deterministic_run_id() -> None:
 
     assert first.run_id != second.run_id
     assert first.manifest["retrievers"] == second.manifest["retrievers"] == ["dense"]
+
+
+def test_bm25_settings_change_deterministic_run_id() -> None:
+    documents = [Document(id="document", text="relevant")]
+    queries = [
+        EvaluationQuery(
+            id="query",
+            query="relevant",
+            relevant_document_ids={"document"},
+        )
+    ]
+    first = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[BM25Retriever(k1=1.5, b=0.75)],
+        top_k=[1],
+    ).run()
+    second = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[BM25Retriever(k1=1.7, b=0.75)],
+        top_k=[1],
+    ).run()
+
+    assert first.run_id != second.run_id
+    assert first.manifest["retriever_settings"]["bm25"] == {
+        "b": 0.75,
+        "k1": 1.5,
+        "name": "bm25",
+        "tokenizer": "default",
+        "type": "bm25",
+    }
+
+
+def test_bm25_tokenizer_closure_state_changes_deterministic_run_id() -> None:
+    def tokenizer(separator: str):
+        return lambda value: value.split(separator)
+
+    documents = [Document(id="document", text="alpha|beta")]
+    queries = [
+        EvaluationQuery(
+            id="query",
+            query="alpha",
+            relevant_document_ids={"document"},
+        )
+    ]
+    first = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[BM25Retriever(tokenizer=tokenizer("|"))],
+        top_k=[1],
+    ).run()
+    second = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[BM25Retriever(tokenizer=tokenizer("/"))],
+        top_k=[1],
+    ).run()
+
+    assert first.run_id != second.run_id
+    assert (
+        first.manifest["retriever_settings"]["bm25"]["tokenizer"]
+        != second.manifest["retriever_settings"]["bm25"]["tokenizer"]
+    )
+
+
+def test_dense_index_hashes_participate_in_run_id() -> None:
+    documents = [Document(id="document", text="relevant")]
+    queries = [
+        EvaluationQuery(
+            id="query",
+            query="relevant",
+            relevant_document_ids={"document"},
+        )
+    ]
+    first = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[DenseRetriever(backend=_RunnerEmbeddingBackend())],
+        top_k=[1],
+    ).run()
+    second = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[
+            DenseRetriever(
+                backend=_RunnerEmbeddingBackend(),
+                query_prompt="question: ",
+            )
+        ],
+        top_k=[1],
+    ).run()
+
+    assert first.manifest["index_hashes"]
+    assert second.manifest["index_hashes"]
+    assert first.run_id != second.run_id
+
+
+def test_nested_dense_index_hashes_keep_distinct_strategy_paths() -> None:
+    top_level = DenseRetriever(backend=_RunnerEmbeddingBackend())
+    nested = DenseRetriever(backend=_AlternateRunnerEmbeddingBackend())
+    hybrid = HybridRetriever([BM25Retriever(), nested], candidate_k=1)
+
+    result = EvaluationRunner(
+        documents=[Document(id="document", text="shared relevant")],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="shared",
+                relevant_document_ids={"document"},
+            )
+        ],
+        retrievers=[top_level, hybrid],
+        top_k=[1],
+    ).run()
+
+    assert set(result.manifest["index_hashes"]) == {
+        "dense",
+        "hybrid.sources.dense",
+    }

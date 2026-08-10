@@ -19,6 +19,7 @@ from retrieval_lab.domain import (
 )
 from retrieval_lab.evaluation.engine import (
     aggregate_metrics,
+    evaluate_cutoff_rankings,
     evaluate_ranking,
     normalize_top_k,
 )
@@ -32,8 +33,10 @@ from retrieval_lab.retrievers.callable import (
     _build_manifest,
     _evaluation_ids,
     _item_payload,
+    _normalize_scored_items,
     _ranking_signature,
     _utc_timestamp,
+    _validate_chunk_hash,
     _validate_items,
     _validate_top_k,
     _with_warnings,
@@ -112,6 +115,7 @@ async def evaluate_async_retrievers(
     concurrency: int = 1,
     repetitions: int = 1,
     timeout_s: float | None = None,
+    chunk_hash: str | None = None,
 ) -> EvaluationResult:
     """Evaluate asynchronous retrievers without a corpus or index.
 
@@ -135,6 +139,7 @@ async def evaluate_async_retrievers(
     normalized_concurrency = _validate_positive_int(concurrency, "concurrency")
     normalized_repetitions = _validate_positive_int(repetitions, "repetitions")
     normalized_timeout = _validate_timeout(timeout_s)
+    normalized_chunk_hash = _validate_chunk_hash(chunk_hash)
 
     max_k = max(normalized_top_k)
     completed: dict[tuple[str, int, int], tuple[tuple[RetrievedItem, ...], float]] = {}
@@ -180,7 +185,7 @@ async def evaluate_async_retrievers(
         if finished_ns < started_ns:
             raise ConfigurationError("clock readings must be monotonic")
         try:
-            items = _validate_items(raw_items, top_k=max_k)
+            items = _normalize_scored_items(_validate_items(raw_items, top_k=max_k))
         except RetrieverContractError as exc:
             raise RetrieverContractError(
                 f"retriever {name!r} violated the result contract for query "
@@ -281,15 +286,33 @@ async def evaluate_async_retrievers(
                 first_items,
                 relevance_level=dataset.relevance_level,
             )
-            evaluations.append(
-                evaluate_ranking(
-                    query_id=query.id,
-                    retrieved_ids=retrieved_ids,
-                    relevance_grades=dataset.relevance_grades_by_query[query.id],
-                    top_k=normalized_top_k,
-                    search_latency_ms=float(sum(samples) / len(samples)),
+            search_latency_ms = float(sum(samples) / len(samples))
+            if dataset.relevance_level == "document":
+                evaluations.append(
+                    evaluate_cutoff_rankings(
+                        query_id=query.id,
+                        retrieved_ids=retrieved_ids,
+                        retrieved_ids_by_cutoff={
+                            cutoff: _evaluation_ids(
+                                first_items[:cutoff], relevance_level="document"
+                            )
+                            for cutoff in normalized_top_k
+                        },
+                        relevance_grades=dataset.relevance_grades_by_query[query.id],
+                        top_k=normalized_top_k,
+                        search_latency_ms=search_latency_ms,
+                    )
                 )
-            )
+            else:
+                evaluations.append(
+                    evaluate_ranking(
+                        query_id=query.id,
+                        retrieved_ids=retrieved_ids,
+                        relevance_grades=dataset.relevance_grades_by_query[query.id],
+                        top_k=normalized_top_k,
+                        search_latency_ms=search_latency_ms,
+                    )
+                )
             rankings_payload.append(
                 {
                     "items": [_item_payload(item) for item in first_items],
@@ -313,6 +336,7 @@ async def evaluate_async_retrievers(
         top_k=normalized_top_k,
         rankings_by_name=rankings_by_name,
         started_at=started_at,
+        chunk_hash=normalized_chunk_hash,
     )
     runtime = cast(
         dict[str, JSONValue], cast(Mapping[str, JSONValue], manifest["runtime"])

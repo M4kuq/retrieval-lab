@@ -78,6 +78,7 @@ class QueryEvaluation:
     metrics_by_cutoff: Mapping[int, Mapping[str, float]]
     search_latency_ms: float | None = None
     warnings: tuple[str, ...] = ()
+    retrieved_ids_by_cutoff: Mapping[int, tuple[str, ...]] | None = None
 
     def __post_init__(self) -> None:
         query_id = require_non_empty_string(
@@ -105,14 +106,85 @@ class QueryEvaluation:
             )
         object.__setattr__(self, "query_id", query_id)
         object.__setattr__(self, "retrieved_ids", retrieved_ids)
-        object.__setattr__(
-            self,
-            "metrics_by_cutoff",
-            _normalize_metrics(
-                self.metrics_by_cutoff,
-                owner=f"QueryEvaluation[{query_id!r}]",
-            ),
+        normalized_metrics = _normalize_metrics(
+            self.metrics_by_cutoff,
+            owner=f"QueryEvaluation[{query_id!r}]",
         )
+        object.__setattr__(self, "metrics_by_cutoff", normalized_metrics)
+        evidence = self.retrieved_ids_by_cutoff
+        if evidence is not None:
+            if not isinstance(evidence, Mapping):
+                raise EvaluationError(
+                    f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff must "
+                    "be a mapping"
+                )
+            normalized_evidence_input: dict[int, Sequence[str]] = {}
+            for raw_cutoff, raw_evidence_ids in evidence.items():
+                cutoff = require_positive_int(
+                    raw_cutoff,
+                    field_name=(
+                        f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff cutoff"
+                    ),
+                    error_type=EvaluationError,
+                )
+                normalized_evidence_input[cutoff] = raw_evidence_ids
+            if set(normalized_evidence_input) != set(normalized_metrics):
+                raise EvaluationError(
+                    f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff must "
+                    "match metric cutoffs"
+                )
+            normalized_evidence: dict[int, tuple[str, ...]] = {}
+            previous_ids: tuple[str, ...] = ()
+            for cutoff in sorted(normalized_evidence_input):
+                raw_ids = normalized_evidence_input[cutoff]
+                if isinstance(raw_ids, (str, bytes)) or not isinstance(
+                    raw_ids, Sequence
+                ):
+                    raise EvaluationError(
+                        f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff"
+                        f"[{cutoff}] must be a sequence"
+                    )
+                ids = tuple(
+                    require_non_empty_string(
+                        item,
+                        field_name=(
+                            f"QueryEvaluation[{query_id!r}]."
+                            f"retrieved_ids_by_cutoff[{cutoff}] item"
+                        ),
+                        error_type=EvaluationError,
+                    )
+                    for item in raw_ids
+                )
+                if len(ids) > cutoff or len(set(ids)) != len(ids):
+                    raise EvaluationError(
+                        f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff"
+                        f"[{cutoff}] must contain at most {cutoff} unique IDs"
+                    )
+                if retrieved_ids[: len(ids)] != ids:
+                    raise EvaluationError(
+                        f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff"
+                        f"[{cutoff}] must be a prefix of retrieved_ids"
+                    )
+                if retrieved_ids and not ids:
+                    raise EvaluationError(
+                        f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff"
+                        f"[{cutoff}] must include the first retrieved ID"
+                    )
+                if (
+                    len(ids) < len(previous_ids)
+                    or ids[: len(previous_ids)] != previous_ids
+                ):
+                    raise EvaluationError(
+                        f"QueryEvaluation[{query_id!r}].retrieved_ids_by_cutoff "
+                        "must be monotonic prefix extensions"
+                    )
+                normalized_evidence[cutoff] = ids
+                previous_ids = ids
+            object.__setattr__(
+                self,
+                "retrieved_ids_by_cutoff",
+                MappingProxyType(normalized_evidence),
+            )
         if self.search_latency_ms is not None:
             latency = self.search_latency_ms
             if isinstance(latency, bool) or not isinstance(latency, (int, float)):
@@ -160,6 +232,11 @@ class QueryEvaluation:
             "query_id": self.query_id,
             "retrieved_ids": list(self.retrieved_ids),
         }
+        if self.retrieved_ids_by_cutoff is not None:
+            payload["retrieved_ids_by_cutoff"] = {
+                str(cutoff): list(self.retrieved_ids_by_cutoff[cutoff])
+                for cutoff in sorted(self.retrieved_ids_by_cutoff)
+            }
         # Omit new optional fields for legacy manually-constructed query
         # results. Runner-produced results always carry the measured latency
         # and warning list.

@@ -76,6 +76,50 @@ def evaluate_ranking(
         metrics_by_cutoff=metrics_by_cutoff,
         search_latency_ms=search_latency_ms,
         warnings=tuple(warnings),
+        retrieved_ids_by_cutoff={
+            cutoff: tuple(retrieved_ids[:cutoff]) for cutoff in top_k
+        },
+    )
+
+
+def evaluate_cutoff_rankings(
+    *,
+    query_id: str,
+    retrieved_ids: Sequence[str],
+    retrieved_ids_by_cutoff: Mapping[int, Sequence[str]],
+    relevance_grades: Mapping[str, int],
+    top_k: Sequence[int],
+    search_latency_ms: float | None = None,
+    warnings: Sequence[str] = (),
+) -> QueryEvaluation:
+    """Evaluate cutoff-specific rankings while retaining one evidence ranking."""
+
+    metrics_by_cutoff: dict[int, dict[str, float]] = {}
+    for cutoff in top_k:
+        try:
+            cutoff_ids = retrieved_ids_by_cutoff[cutoff]
+        except KeyError as exc:
+            raise EvaluationError(
+                f"cutoff ranking is missing for query {query_id!r} at {cutoff}"
+            ) from exc
+        evaluation = evaluate_ranking(
+            query_id=query_id,
+            retrieved_ids=cutoff_ids,
+            relevance_grades=relevance_grades,
+            top_k=(cutoff,),
+            search_latency_ms=search_latency_ms,
+            warnings=warnings,
+        )
+        metrics_by_cutoff[cutoff] = dict(evaluation.metrics_by_cutoff[cutoff])
+    return QueryEvaluation(
+        query_id=query_id,
+        retrieved_ids=tuple(retrieved_ids),
+        metrics_by_cutoff=metrics_by_cutoff,
+        search_latency_ms=search_latency_ms,
+        warnings=tuple(warnings),
+        retrieved_ids_by_cutoff={
+            cutoff: tuple(retrieved_ids_by_cutoff[cutoff]) for cutoff in top_k
+        },
     )
 
 

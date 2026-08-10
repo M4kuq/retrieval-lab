@@ -18,6 +18,8 @@ from retrieval_lab import (
 class LocalEmbeddingBackend:
     """Tiny deterministic embedding backend; it never downloads a model."""
 
+    cache_identity = "local-tutorial-keyword-v1"
+
     metadata = EmbeddingModelMetadata(
         model_id="local/tutorial-keyword-v1",
         requested_revision="v1",

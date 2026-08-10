@@ -159,9 +159,9 @@ def _atomic_write(
     """Write canonical bytes with fsync + same-directory replacement."""
 
     limit = _cache_max_bytes(max_bytes)
-    path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="wb",
             dir=path.parent,

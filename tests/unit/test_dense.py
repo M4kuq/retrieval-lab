@@ -41,6 +41,10 @@ class FakeEmbeddingBackend:
         resolved_revision: str | None = "resolved-revision",
     ) -> None:
         self.responses = responses
+        self.cache_identity = {
+            "model_id": model_id,
+            "requested_revision": requested_revision,
+        }
         self.metadata = EmbeddingModelMetadata(
             model_id=model_id,
             requested_revision=requested_revision,
@@ -324,7 +328,10 @@ def test_default_adapter_is_lazy_and_missing_extra_has_an_actionable_error(
 ) -> None:
     def missing_dependency(module_name: str) -> object:
         assert module_name == "sentence_transformers"
-        raise ImportError("not installed")
+        raise ModuleNotFoundError(
+            "not installed",
+            name="sentence_transformers",
+        )
 
     monkeypatch.setattr(dense, "import_module", missing_dependency)
     retriever = DenseRetriever()
@@ -333,6 +340,123 @@ def test_default_adapter_is_lazy_and_missing_extra_has_an_actionable_error(
         OptionalDependencyError, match=r"pip install retrieval-lab\[dense\]"
     ):
         retriever.index([_chunk("document", "document")])
+
+
+def test_transitive_default_adapter_import_failure_keeps_typed_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def transitive_failure(module_name: str) -> object:
+        assert module_name == "sentence_transformers"
+        raise ImportError("missing torch", name="torch")
+
+    monkeypatch.setattr(dense, "import_module", transitive_failure)
+    retriever = DenseRetriever()
+
+    with pytest.raises(
+        RetrieverContractError, match="importing sentence-transformers"
+    ) as raised:
+        retriever.index([_chunk("document", "document")])
+
+    assert isinstance(raised.value.__cause__, ImportError)
+
+
+def test_plain_default_adapter_import_failure_keeps_typed_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cause = ImportError("binary extension is incompatible")
+
+    def import_failure(module_name: str) -> object:
+        assert module_name == "sentence_transformers"
+        raise cause
+
+    monkeypatch.setattr(dense, "import_module", import_failure)
+
+    with pytest.raises(RetrieverContractError) as raised:
+        DenseRetriever().index([_chunk("document", "document")])
+
+    assert raised.value.__cause__ is cause
+
+
+def test_cached_revision_is_revalidated_after_query_initialization() -> None:
+    class MutableRevisionBackend:
+        def __init__(self) -> None:
+            self.metadata = EmbeddingModelMetadata(model_id="mutable")
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            self.metadata = EmbeddingModelMetadata(
+                model_id="mutable",
+                resolved_revision="new-revision",
+            )
+            return [[1.0, 0.0] for _ in texts]
+
+    retriever = DenseRetriever(backend=MutableRevisionBackend())
+    retriever._cache_restore(
+        [_chunk("document", "document")],
+        [[1.0, 0.0]],
+        resolved_revision="old-revision",
+    )
+
+    with pytest.raises(RetrieverContractError, match="revision changed"):
+        retriever.search("query", 1)
+
+
+@pytest.mark.parametrize("drift", ["revision", "cache_identity"])
+def test_query_encoding_rejects_backend_identity_drift(drift: str) -> None:
+    class DriftingBackend:
+        def __init__(self) -> None:
+            self.revision = "r1"
+            self.identity = "identity-1"
+
+        @property
+        def metadata(self) -> EmbeddingModelMetadata:
+            return EmbeddingModelMetadata(
+                model_id="drifting",
+                resolved_revision=self.revision,
+            )
+
+        @property
+        def cache_identity(self) -> str:
+            return self.identity
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            if texts and texts[0].startswith("query: "):
+                if drift == "revision":
+                    self.revision = "r2"
+                else:
+                    self.identity = "identity-2"
+            return [[1.0, 0.0] for _ in texts]
+
+    retriever = DenseRetriever(backend=DriftingBackend())
+    retriever.index([_chunk("document", "document")])
+
+    with pytest.raises(RetrieverContractError, match="identity or revision changed"):
+        retriever.search("query", 1)
+
+
+def test_huge_integer_embedding_is_a_typed_contract_error() -> None:
+    class HugeBackend:
+        metadata = EmbeddingModelMetadata(model_id="huge")
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            return [[10**10000, 1.0] for _ in texts]
+
+    with pytest.raises(RetrieverContractError, match="finite real number"):
+        DenseRetriever(backend=HugeBackend()).index([_chunk("document", "document")])
 
 
 def test_default_adapter_passes_sentence_transformers_options_and_revision(
@@ -439,6 +563,14 @@ def test_settings_have_all_dense_reproducibility_values() -> None:
     )
 
     assert retriever.settings == {
+        "backend": {
+            "backend_type": (
+                f"{FakeEmbeddingBackend.__module__}.{FakeEmbeddingBackend.__qualname__}"
+            ),
+            "cache_identity_sha256": retriever.settings["backend"][
+                "cache_identity_sha256"
+            ],
+        },
         "batch_size": 9,
         "document_prompt": "document: ",
         "model_id": "fake/embedding-model",
@@ -450,3 +582,36 @@ def test_settings_have_all_dense_reproducibility_values() -> None:
         "similarity": "inner_product",
         "type": "dense",
     }
+
+
+def test_custom_backend_settings_require_stable_cache_identity() -> None:
+    class BackendWithoutIdentity:
+        metadata = EmbeddingModelMetadata(model_id="custom")
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            return [[1.0] for _ in texts]
+
+    retriever = DenseRetriever(backend=BackendWithoutIdentity())
+
+    with pytest.raises(RetrieverContractError, match="cache_identity"):
+        _ = retriever.settings
+
+
+def test_custom_backend_identity_is_hashed_and_changes_settings() -> None:
+    first_backend = FakeEmbeddingBackend({})
+    second_backend = FakeEmbeddingBackend({})
+    first_backend.cache_identity = {"configuration": "first", "token": "secret"}
+    second_backend.cache_identity = {"configuration": "second", "token": "secret"}
+
+    first_settings = DenseRetriever(backend=first_backend).settings
+    second_settings = DenseRetriever(backend=second_backend).settings
+
+    assert first_settings != second_settings
+    serialized = repr(first_settings)
+    assert "configuration" not in serialized
+    assert "secret" not in serialized
