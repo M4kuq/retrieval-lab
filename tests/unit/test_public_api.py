@@ -6,12 +6,18 @@ from retrieval_lab import (
     EmbeddingModelMetadata,
     EvaluationDataset,
     EvaluationRunner,
+    ExperimentOutput,
     HybridRetriever,
+    InitializedProject,
     OptionalDependencyError,
     RetrievalLabError,
     RetrievedQueryResult,
+    ValidationResult,
     evaluate_results,
+    initialize_project,
     load_documents,
+    run_configured_experiment,
+    validate_config_inputs,
     validate_dataset,
 )
 from retrieval_lab.errors import RetrievalLabError as ErrorAlias
@@ -36,3 +42,12 @@ def test_new_milestone_apis_are_available_from_the_package_root() -> None:
     assert evaluate_results.__module__ == "retrieval_lab.evaluation.precomputed"
     assert load_documents.__module__ == "retrieval_lab.loaders"
     assert validate_dataset.__module__ == "retrieval_lab.datasets"
+
+
+def test_application_services_are_available_from_the_package_root() -> None:
+    assert InitializedProject.__module__ == "retrieval_lab.application"
+    assert ValidationResult.__module__ == "retrieval_lab.application"
+    assert ExperimentOutput.__module__ == "retrieval_lab.application"
+    assert initialize_project.__module__ == "retrieval_lab.application"
+    assert validate_config_inputs.__module__ == "retrieval_lab.application"
+    assert run_configured_experiment.__module__ == "retrieval_lab.application"

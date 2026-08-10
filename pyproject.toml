@@ -33,6 +33,9 @@ dev = [
   "types-PyYAML>=6,<7",
 ]
 
+[project.scripts]
+retrieval-lab = "retrieval_lab.cli.app:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

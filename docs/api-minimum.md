@@ -41,6 +41,8 @@ The following names are importable from `retrieval_lab`:
 - `check_comparability`, `compare_runs`
 - `QualityGateConfig`, `QualityGateCheck`, `QualityGateResult`, `QualityGateReport`
 - `evaluate_quality_gates`
+- `InitializedProject`, `ValidationResult`, `ExperimentOutput`
+- `initialize_project`, `validate_config_inputs`, `run_configured_experiment`
 - `load_documents`
 - `validate_dataset`
 - `evaluate_results`
@@ -227,6 +229,30 @@ provide library-level results without printing. Attach results immutably with
 `quality_gates` list round-trips through the existing result loader.
 An empty gate sequence produces an empty passing report and preserves the
 existing empty `quality_gates` result shape.
+
+## Application services and CLI
+
+The package provides three application services. `initialize_project(target)`
+creates a fixed offline sample without overwriting owned files unless
+`force=True`. `validate_config_inputs(config_path)` validates configuration,
+corpus, dataset, and relevance IDs without executing retrieval.
+`run_configured_experiment(config_path, ...)` runs through
+`EvaluationRunner.from_config()` and writes deterministic `result.json`, CSV,
+and standalone HTML outputs. The services never print and return typed result
+records.
+
+The `retrieval-lab` console adapter is intentionally thin:
+
+```console
+retrieval-lab init ./my-evaluation
+retrieval-lab validate -c ./my-evaluation/retrieval-lab.yaml
+retrieval-lab run -c ./my-evaluation/retrieval-lab.yaml
+```
+
+`init` rejects existing owned files and symlinked template targets. `run`
+accepts repeatable `--format json|csv|html` and an optional `--output-dir`.
+Success is written to stdout; concise errors are written to stderr without
+tracebacks or absolute paths.
 
 Saved runs can be compared without re-running retrieval:
 
