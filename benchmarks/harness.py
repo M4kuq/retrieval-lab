@@ -349,9 +349,9 @@ def _integer_mapping(value: object) -> dict[str, JSONValue]:
 
 def _environment() -> dict[str, JSONValue]:
     try:
-        version = importlib_metadata.version("retrieval-lab")
+        version = importlib_metadata.version("retrieval-lab-sdk")
     except importlib_metadata.PackageNotFoundError:
-        version = "unknown"
+        version = "0.1.0rc1"
     return {
         "cpu": platform.processor() or platform.machine() or "unknown",
         "os": {

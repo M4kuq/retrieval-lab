@@ -1271,6 +1271,7 @@ dense = [
 ]
 dev = [
     { name = "build" },
+    { name = "mkdocs" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -1285,6 +1286,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.3,<2" },
+    { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6,<2" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.17,<2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4,<9" },
