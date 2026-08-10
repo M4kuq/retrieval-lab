@@ -91,6 +91,23 @@ result = evaluate_results(
 Every evaluation path reports HitRate, Recall, Precision, MRR, nDCG, and AP using
 the same shared metric engine and deterministic dataset hash.
 
+## Compare saved runs
+
+Saved result JSON files can be compared without indexing or searching again:
+
+```python
+from retrieval_lab import compare_runs, load_result
+
+comparison = compare_runs(
+    load_result("baseline/result.json"),
+    load_result("candidate/result.json"),
+)
+```
+
+Comparisons require matching dataset/query/relevance/metric/top-k contracts and
+report retriever, corpus, chunk, configuration, and latency differences
+separately.
+
 To evaluate a synchronous search callable directly, return `RetrievedItem`
 records in the provider's best-first order:
 

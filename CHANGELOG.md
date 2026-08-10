@@ -30,6 +30,8 @@ Versioning once the first public release is published.
   execution.
 - Safe schema-versioned result reload, atomic JSON/CSV/HTML persistence, and
   standalone dependency-free reports with formula and HTML injection protection.
+- Deterministic typed comparison of saved runs with complete comparability
+  diagnostics and aggregate/query-level metric deltas.
 
 ### Migration notes
 

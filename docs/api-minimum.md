@@ -36,6 +36,9 @@ The following names are importable from `retrieval_lab`:
 - `RetrievalConfig` and its typed nested configuration records
 - `load_config`
 - `load_result`
+- `ComparisonTolerance`, `ComparabilityIssue`, `ComparabilityReport`
+- `MetricDelta`, `QueryDeltaExtreme`, `MetricComparison`, `RunComparison`
+- `check_comparability`, `compare_runs`
 - `load_documents`
 - `validate_dataset`
 - `evaluate_results`
@@ -211,6 +214,24 @@ rejects duplicate keys, non-finite numbers, malformed metrics, inconsistent
 aggregates, and partial latency data. Unknown additive fields are ignored; the
 non-empty `quality_gates` result form is not loadable until its typed execution
 API exists. `load_json` defaults to a 64 MiB file limit.
+
+Saved runs can be compared without re-running retrieval:
+
+```python
+from retrieval_lab import compare_runs, load_result
+
+comparison = compare_runs(
+    load_result("baseline/result.json"),
+    load_result("candidate/result.json"),
+)
+```
+
+`check_comparability()` returns all blocking mismatches as typed issues without
+raising. `compare_runs()` raises `IncomparableRunError` with the complete issue
+tuple when dataset hash, query IDs, relevance level, metric version, top-k, or
+metric shapes are incompatible. Retriever, corpus, chunk, configuration, seed,
+run identity, timestamp, and latency-presence differences are reported as
+experimental differences; only common retrievers receive metric deltas.
 
 `summary()` returns deterministic plain text and never prints. `to_summary_csv()`
 and `to_per_query_csv()` return UTF-8 long-form CSV; the corresponding save
