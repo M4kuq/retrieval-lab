@@ -8,13 +8,17 @@ import pytest
 
 from retrieval_lab import (
     BaseRetriever,
+    BM25Retriever,
     Chunk,
     ConfigurationError,
     CorpusValidationError,
     DatasetValidationError,
+    DenseRetriever,
     Document,
+    EmbeddingModelMetadata,
     EvaluationQuery,
     EvaluationRunner,
+    KeywordRetriever,
     SearchResult,
 )
 
@@ -192,3 +196,84 @@ def test_identical_inputs_produce_identical_result_json() -> None:
     second = EvaluationRunner.quick_evaluate(documents=documents, queries=queries)
 
     assert first.to_json() == second.to_json()
+
+
+class _RunnerEmbeddingBackend:
+    metadata = EmbeddingModelMetadata(
+        model_id="runner-fake",
+        requested_revision="requested",
+        resolved_revision="resolved",
+    )
+
+    def encode(
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int,
+    ) -> Sequence[Sequence[float]]:
+        return [
+            [1.0, 0.0]
+            if "shared relevant" in text or text in {"query: relevant", "query: shared"}
+            else [0.0, 1.0]
+            for text in texts
+        ]
+
+
+def test_runner_evaluates_keyword_bm25_and_dense_on_shared_chunks() -> None:
+    result = EvaluationRunner(
+        documents=[
+            Document(id="a", text="shared relevant"),
+            Document(id="b", text="shared unrelated"),
+        ],
+        queries=[
+            EvaluationQuery(
+                id="query",
+                query="shared",
+                relevant_document_ids={"a"},
+            )
+        ],
+        retrievers=[
+            KeywordRetriever(),
+            BM25Retriever(),
+            DenseRetriever(backend=_RunnerEmbeddingBackend()),
+        ],
+        top_k=[1],
+    ).run()
+
+    assert set(result.metrics) == {"keyword", "bm25", "dense"}
+    assert result.metrics["dense"].recall_at(1) == 1.0
+    assert result.manifest["retrievers"] == ["keyword", "bm25", "dense"]
+    dense_settings = result.manifest["retriever_settings"]["dense"]
+    assert dense_settings["model_id"] == "runner-fake"
+    assert dense_settings["resolved_revision"] == "resolved"
+
+
+def test_dense_settings_change_deterministic_run_id() -> None:
+    documents = [Document(id="document", text="relevant")]
+    queries = [
+        EvaluationQuery(
+            id="query",
+            query="relevant",
+            relevant_document_ids={"document"},
+        )
+    ]
+    first = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[DenseRetriever(backend=_RunnerEmbeddingBackend())],
+        top_k=[1],
+    ).run()
+    second = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        retrievers=[
+            DenseRetriever(
+                backend=_RunnerEmbeddingBackend(),
+                normalize_embeddings=False,
+            )
+        ],
+        top_k=[1],
+    ).run()
+
+    assert first.run_id != second.run_id
+    assert first.manifest["retrievers"] == second.manifest["retrievers"] == ["dense"]

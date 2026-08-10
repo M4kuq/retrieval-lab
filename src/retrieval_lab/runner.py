@@ -156,7 +156,7 @@ class EvaluationRunner:
             documents=self._documents,
             queries=self._queries,
             chunks=chunks,
-            retriever_names=tuple(item.name for item in self._retrievers),
+            retrievers=self._retrievers,
             top_k=self._top_k,
             chunker=self._chunker,
             relevance_level=self._relevance_level,
@@ -279,7 +279,7 @@ def _build_manifest(
     documents: Sequence[Document],
     queries: Sequence[EvaluationQuery],
     chunks: Sequence[Chunk],
-    retriever_names: Sequence[str],
+    retrievers: Sequence[BaseRetriever],
     top_k: Sequence[int],
     chunker: FixedSizeChunker,
     relevance_level: RelevanceLevel,
@@ -314,12 +314,17 @@ def _build_manifest(
             "settings": {"overlap": chunker.overlap, "size": chunker.size},
         }
     )
+    retriever_names = tuple(retriever.name for retriever in retrievers)
+    retriever_settings: dict[str, JSONValue] = {
+        retriever.name: plain_json(retriever.settings) for retriever in retrievers
+    }
     run_payload: dict[str, JSONValue] = {
         "chunk_hash": chunk_hash,
         "dataset_hash": dataset_hash,
         "metric_version": 1,
         "relevance_level": relevance_level,
         "retrievers": _json_values(retriever_names),
+        "retriever_settings": retriever_settings,
         "top_k": _json_values(top_k),
     }
     run_id = content_hash(run_payload)
@@ -335,6 +340,7 @@ def _build_manifest(
         "query_ids": _json_values(tuple(query.id for query in queries)),
         "relevance_level": relevance_level,
         "retrievers": _json_values(retriever_names),
+        "retriever_settings": retriever_settings,
         "top_k": _json_values(top_k),
     }
     return manifest, run_id

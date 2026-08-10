@@ -5,7 +5,8 @@ RAG retrieval strategies on your own corpus.
 
 The project is currently pre-alpha. The supported local pipeline loads TXT,
 Markdown, and JSONL, validates graded relevance data, and compares deterministic
-Keyword and BM25 retrieval without network access or paid services.
+Keyword and BM25 retrieval without network access or paid services. Exact dense
+retrieval is available as an optional extra.
 
 ## Quick start
 
@@ -90,12 +91,25 @@ result = evaluate_results(
 Every evaluation path reports HitRate, Recall, Precision, MRR, nDCG, and AP using
 the same shared metric engine and deterministic dataset hash.
 
+## Dense retrieval
+
+Install the optional dependency when you want multilingual E5 dense retrieval:
+
+```bash
+pip install 'retrieval-lab[dense]'
+```
+
+`DenseRetriever` uses `intfloat/multilingual-e5-small` by default and lazily
+loads the model on its first encode operation. You can inject an
+`EmbeddingBackend` to use a custom embedding service without adding a vector
+database dependency.
+
 ## Scope
 
-v0.1 focuses on retrieval evaluation. Dense retrieval, RRF Hybrid, CSV/HTML
-reports, configuration files, CLI commands, and CI regression gates remain under
-development. Answer generation and LLM-based judging are planned only after
-retrieval evaluation is stable.
+v0.1 focuses on retrieval evaluation. RRF Hybrid, CSV/HTML reports, configuration
+files, CLI commands, and CI regression gates remain under development. Answer
+generation and LLM-based judging are planned only after retrieval evaluation is
+stable.
 
 See `docs/product-plan.md` and `docs/technical-design.md` for the full roadmap and
 contracts.

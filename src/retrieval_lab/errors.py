@@ -6,6 +6,7 @@ from retrieval_lab.exceptions import (
     DatasetValidationError,
     EvaluationError,
     IncomparableRunError,
+    OptionalDependencyError,
     RetrievalLabError,
     RetrieverContractError,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "DatasetValidationError",
     "EvaluationError",
     "IncomparableRunError",
+    "OptionalDependencyError",
     "RetrievalLabError",
     "RetrieverContractError",
 ]

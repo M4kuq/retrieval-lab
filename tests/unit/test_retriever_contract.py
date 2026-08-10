@@ -9,9 +9,25 @@ from retrieval_lab.exceptions import RetrieverContractError
 from retrieval_lab.models import Chunk
 from retrieval_lab.retrievers.base import BaseRetriever
 from retrieval_lab.retrievers.bm25 import BM25Retriever
+from retrieval_lab.retrievers.dense import (
+    DenseRetriever,
+    EmbeddingModelMetadata,
+)
 from retrieval_lab.retrievers.keyword import KeywordRetriever
 
 RetrieverFactory = Callable[[], BaseRetriever]
+
+
+class _ContractEmbeddingBackend:
+    metadata = EmbeddingModelMetadata(model_id="contract-fake")
+
+    def encode(
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int,
+    ) -> Sequence[Sequence[float]]:
+        return [[1.0, 0.0] for _ in texts]
 
 
 def _chunk(chunk_id: str, text: str) -> Chunk:
@@ -25,7 +41,14 @@ def _chunk(chunk_id: str, text: str) -> Chunk:
     )
 
 
-@pytest.fixture(params=[KeywordRetriever, BM25Retriever], ids=["keyword", "bm25"])
+@pytest.fixture(
+    params=[
+        KeywordRetriever,
+        BM25Retriever,
+        lambda: DenseRetriever(backend=_ContractEmbeddingBackend()),
+    ],
+    ids=["keyword", "bm25", "dense"],
+)
 def retriever_factory(request: pytest.FixtureRequest) -> RetrieverFactory:
     return cast(RetrieverFactory, request.param)
 

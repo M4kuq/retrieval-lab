@@ -21,6 +21,10 @@ class RetrieverContractError(RetrievalLabError):
     """Raised when a retriever result violates the ranking contract."""
 
 
+class OptionalDependencyError(RetrievalLabError):
+    """Raised when an optional Retrieval Lab feature is not installed."""
+
+
 class EvaluationError(RetrievalLabError):
     """Raised when an evaluation cannot produce a valid result."""
 
@@ -35,6 +39,7 @@ __all__ = [
     "DatasetValidationError",
     "EvaluationError",
     "IncomparableRunError",
+    "OptionalDependencyError",
     "RetrievalLabError",
     "RetrieverContractError",
 ]
