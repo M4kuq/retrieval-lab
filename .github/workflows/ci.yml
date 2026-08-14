@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --extra dev
-      - run: uv run ruff check .
+      - run: uv run ruff check . --output-format github
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest
