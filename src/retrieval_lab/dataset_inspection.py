@@ -141,9 +141,7 @@ def _duplicate_query_issues(
     by_text: dict[str, list[str]] = defaultdict(list)
     for query in dataset.queries:
         by_text[_normalize(query.query)].append(query.id)
-    groups = sorted(
-        tuple(sorted(ids)) for ids in by_text.values() if len(ids) > 1
-    )
+    groups = sorted(tuple(sorted(ids)) for ids in by_text.values() if len(ids) > 1)
     return tuple(
         DatasetInspectionIssue(
             code="duplicate_query_text",
@@ -214,9 +212,7 @@ def _normalize(value: str) -> str:
 
 
 def _validate_probability(value: object) -> float:
-    message = (
-        "relevance_concentration_threshold must be a finite number in (0, 1]"
-    )
+    message = "relevance_concentration_threshold must be a finite number in (0, 1]"
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise DatasetValidationError(message)
     normalized = float(value)
