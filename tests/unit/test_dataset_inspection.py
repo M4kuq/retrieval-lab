@@ -19,7 +19,7 @@ def test_inspect_dataset_detects_normalized_duplicate_queries() -> None:
     dataset = _dataset(
         EvaluationQuery(
             "q-1",
-            "ＡＷＳ  Secrets",
+            "\uff21\uff37\uff33  Secrets",
             relevant_document_ids={"doc-1"},
         ),
         EvaluationQuery(
