@@ -178,9 +178,7 @@ def _verbatim_issues(
     *,
     min_chars: int,
 ) -> tuple[DatasetInspectionIssue, ...]:
-    normalized_corpus = {
-        key: _normalize(value) for key, value in corpus_text.items()
-    }
+    normalized_corpus = {key: _normalize(value) for key, value in corpus_text.items()}
     findings: list[DatasetInspectionIssue] = []
     for query in dataset.queries:
         normalized_query = _normalize(query.query)

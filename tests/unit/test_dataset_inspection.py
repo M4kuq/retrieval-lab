@@ -76,9 +76,7 @@ def test_inspect_dataset_detects_verbatim_query_in_positive_document() -> None:
     report = inspect_dataset(dataset, documents=documents)
 
     issue = next(
-        item
-        for item in report.issues
-        if item.code == "verbatim_query_in_relevant_text"
+        item for item in report.issues if item.code == "verbatim_query_in_relevant_text"
     )
     assert issue.query_ids == ("q-1",)
     assert issue.relevance_ids == ("doc-1",)
@@ -125,9 +123,7 @@ def test_inspect_dataset_supports_chunk_level_corpus() -> None:
 
 
 def test_inspection_report_to_dict_is_json_compatible() -> None:
-    dataset = _dataset(
-        EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"})
-    )
+    dataset = _dataset(EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"}))
 
     payload = inspect_dataset(dataset).to_dict()
 
@@ -140,9 +136,7 @@ def test_inspection_report_to_dict_is_json_compatible() -> None:
 def test_inspect_dataset_rejects_invalid_concentration_threshold(
     value: object,
 ) -> None:
-    dataset = _dataset(
-        EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"})
-    )
+    dataset = _dataset(EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"}))
 
     with pytest.raises(DatasetValidationError, match="threshold"):
         inspect_dataset(
