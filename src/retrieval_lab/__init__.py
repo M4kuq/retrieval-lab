@@ -44,6 +44,12 @@ from retrieval_lab.config import (
     RetrievalConfig,
     load_config,
 )
+from retrieval_lab.dataset_inspection import (
+    DatasetInspectionCode,
+    DatasetInspectionIssue,
+    DatasetInspectionReport,
+    inspect_dataset,
+)
 from retrieval_lab.datasets import EvaluationDataset, RelevanceLevel, validate_dataset
 from retrieval_lab.domain import (
     Chunk,
@@ -109,6 +115,9 @@ __all__ = [
     "CorpusConfig",
     "CorpusValidationError",
     "DatasetConfig",
+    "DatasetInspectionCode",
+    "DatasetInspectionIssue",
+    "DatasetInspectionReport",
     "DatasetValidationError",
     "DenseRetriever",
     "DenseRetrieverConfig",
@@ -164,6 +173,7 @@ __all__ = [
     "evaluate_results",
     "evaluate_retrievers",
     "initialize_project",
+    "inspect_dataset",
     "inspect_result",
     "load_config",
     "load_documents",
