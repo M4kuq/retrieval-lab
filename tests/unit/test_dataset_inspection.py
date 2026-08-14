@@ -17,8 +17,16 @@ def _dataset(*queries: EvaluationQuery) -> EvaluationDataset:
 
 def test_inspect_dataset_detects_normalized_duplicate_queries() -> None:
     dataset = _dataset(
-        EvaluationQuery("q-1", "ＡＷＳ  Secrets", relevant_document_ids={"doc-1"}),
-        EvaluationQuery("q-2", "aws secrets", relevant_document_ids={"doc-2"}),
+        EvaluationQuery(
+            "q-1",
+            "ＡＷＳ  Secrets",
+            relevant_document_ids={"doc-1"},
+        ),
+        EvaluationQuery(
+            "q-2",
+            "aws secrets",
+            relevant_document_ids={"doc-2"},
+        ),
     )
 
     report = inspect_dataset(dataset)
@@ -59,7 +67,10 @@ def test_inspect_dataset_detects_verbatim_query_in_positive_document() -> None:
     )
     dataset = _dataset(query)
     documents = [
-        Document("doc-1", "ここでは AWS Secrets Manager の設定方法 を説明します。")
+        Document(
+            "doc-1",
+            "ここでは AWS Secrets Manager の設定方法 を説明します。",
+        )
     ]
 
     report = inspect_dataset(dataset, documents=documents)
@@ -96,7 +107,15 @@ def test_inspect_dataset_supports_chunk_level_corpus() -> None:
         relevant_chunk_ids={"chunk-1"},
     )
     dataset = EvaluationDataset([query], relevance_level="chunk")
-    chunks = [Chunk("chunk-1", "doc-1", "sufficiently long chunk query", 0, 29)]
+    chunks = [
+        Chunk(
+            "chunk-1",
+            "doc-1",
+            "sufficiently long chunk query",
+            0,
+            29,
+        )
+    ]
 
     report = inspect_dataset(dataset, chunks=chunks)
 
@@ -118,7 +137,9 @@ def test_inspection_report_to_dict_is_json_compatible() -> None:
 
 
 @pytest.mark.parametrize("value", [0, -0.1, 1.1, float("inf"), True, "0.5"])
-def test_inspect_dataset_rejects_invalid_concentration_threshold(value: object) -> None:
+def test_inspect_dataset_rejects_invalid_concentration_threshold(
+    value: object,
+) -> None:
     dataset = _dataset(
         EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"})
     )

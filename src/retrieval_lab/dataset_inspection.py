@@ -87,21 +87,36 @@ def inspect_dataset(
             queries_by_id[relevance_id].append(query.id)
 
     query_count = len(dataset.queries)
-    max_share = max((count / query_count for count in counts.values()), default=0.0)
+    max_share = max(
+        (count / query_count for count in counts.values()),
+        default=0.0,
+    )
     if query_count >= min_queries:
+        ranked_counts = sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
         concentrated = tuple(
             relevance_id
-            for relevance_id, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            for relevance_id, count in ranked_counts
             if count / query_count > threshold
         )
         if concentrated:
-            query_ids = tuple(sorted({query_id for relevance_id in concentrated for query_id in queries_by_id[relevance_id]}))
+            query_ids = tuple(
+                sorted(
+                    {
+                        query_id
+                        for relevance_id in concentrated
+                        for query_id in queries_by_id[relevance_id]
+                    }
+                )
+            )
             issues.append(
                 DatasetInspectionIssue(
                     code="relevance_concentration",
                     message=(
-                        "positive relevance IDs exceed the configured query-share threshold; "
-                        "review whether judgments are over-concentrated."
+                        "positive relevance IDs exceed the configured query-share "
+                        "threshold; review whether judgments are over-concentrated."
                     ),
                     query_ids=query_ids,
                     relevance_ids=concentrated,
@@ -120,15 +135,22 @@ def inspect_dataset(
     )
 
 
-def _duplicate_query_issues(dataset: EvaluationDataset) -> tuple[DatasetInspectionIssue, ...]:
+def _duplicate_query_issues(
+    dataset: EvaluationDataset,
+) -> tuple[DatasetInspectionIssue, ...]:
     by_text: dict[str, list[str]] = defaultdict(list)
     for query in dataset.queries:
         by_text[_normalize(query.query)].append(query.id)
-    groups = sorted(tuple(sorted(ids)) for ids in by_text.values() if len(ids) > 1)
+    groups = sorted(
+        tuple(sorted(ids)) for ids in by_text.values() if len(ids) > 1
+    )
     return tuple(
         DatasetInspectionIssue(
             code="duplicate_query_text",
-            message="queries normalize to identical text; review whether they are duplicates.",
+            message=(
+                "queries normalize to identical text; review whether they are "
+                "duplicates."
+            ),
             query_ids=group,
         )
         for group in groups
@@ -158,7 +180,9 @@ def _verbatim_issues(
     *,
     min_chars: int,
 ) -> tuple[DatasetInspectionIssue, ...]:
-    normalized_corpus = {key: _normalize(value) for key, value in corpus_text.items()}
+    normalized_corpus = {
+        key: _normalize(value) for key, value in corpus_text.items()
+    }
     findings: list[DatasetInspectionIssue] = []
     for query in dataset.queries:
         normalized_query = _normalize(query.query)
@@ -174,8 +198,9 @@ def _verbatim_issues(
                 DatasetInspectionIssue(
                     code="verbatim_query_in_relevant_text",
                     message=(
-                        "the normalized query appears verbatim in positive corpus text; "
-                        "review it as a possible low-difficulty or generation-leakage candidate."
+                        "the normalized query appears verbatim in positive corpus "
+                        "text; review it as a possible low-difficulty or "
+                        "generation-leakage candidate."
                     ),
                     query_ids=(query.id,),
                     relevance_ids=matches,
@@ -189,17 +214,22 @@ def _normalize(value: str) -> str:
 
 
 def _validate_probability(value: object) -> float:
+    message = (
+        "relevance_concentration_threshold must be a finite number in (0, 1]"
+    )
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise DatasetValidationError("relevance_concentration_threshold must be a finite number in (0, 1]")
+        raise DatasetValidationError(message)
     normalized = float(value)
     if not math.isfinite(normalized) or normalized <= 0.0 or normalized > 1.0:
-        raise DatasetValidationError("relevance_concentration_threshold must be a finite number in (0, 1]")
+        raise DatasetValidationError(message)
     return normalized
 
 
 def _validate_integer(value: object, *, minimum: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise DatasetValidationError(f"inspection limit must be an integer >= {minimum}")
+        raise DatasetValidationError(
+            f"inspection limit must be an integer >= {minimum}"
+        )
     return value
 
 
