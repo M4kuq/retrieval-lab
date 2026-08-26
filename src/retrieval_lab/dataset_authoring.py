@@ -208,7 +208,7 @@ class DatasetDraft:
 
         return tuple(query.id for query in self.queries if not query.complete)
 
-    def add_query(self, query: DraftQuery) -> Self:
+    def add_query(self, query: DraftQuery) -> DatasetDraft:
         """Return a copy with one new query appended."""
 
         return DatasetDraft(
@@ -217,7 +217,7 @@ class DatasetDraft:
             provenance=self.provenance,
         )
 
-    def replace_query(self, query: DraftQuery) -> Self:
+    def replace_query(self, query: DraftQuery) -> DatasetDraft:
         """Return a copy replacing an existing query by identifier."""
 
         replaced = False
@@ -236,7 +236,7 @@ class DatasetDraft:
             provenance=self.provenance,
         )
 
-    def with_provenance(self, provenance: DatasetProvenance) -> Self:
+    def with_provenance(self, provenance: DatasetProvenance) -> DatasetDraft:
         """Return a copy with updated dataset provenance."""
 
         return DatasetDraft(
