@@ -20,25 +20,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --extra dev
-      - name: Format v0.2 review files for diagnosis
-        run: |
-          uv run ruff format \
-            src/retrieval_lab/dataset_workflow.py \
-            src/retrieval_lab/cli/dataset.py \
-            src/retrieval_lab/cli/app.py \
-            src/retrieval_lab/__init__.py \
-            tests/unit/test_dataset_workflow.py \
-            tests/unit/test_cli_dataset.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ruff-formatted-v02-review
-          path: |
-            src/retrieval_lab/dataset_workflow.py
-            src/retrieval_lab/cli/dataset.py
-            src/retrieval_lab/cli/app.py
-            src/retrieval_lab/__init__.py
-            tests/unit/test_dataset_workflow.py
-            tests/unit/test_cli_dataset.py
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src

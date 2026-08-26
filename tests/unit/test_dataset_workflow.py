@@ -93,9 +93,9 @@ def test_review_rejects_unknown_corpus_id(tmp_path: Path) -> None:
 def test_complete_review_requires_all_queries_complete(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     corpus = _corpus(tmp_path)
-    DatasetDraft(
-        [DraftQuery("q-1", "first"), DraftQuery("q-2", "second")]
-    ).save_bundle(bundle)
+    DatasetDraft([DraftQuery("q-1", "first"), DraftQuery("q-2", "second")]).save_bundle(
+        bundle
+    )
 
     with pytest.raises(DatasetValidationError, match="pending"):
         review_dataset_query(

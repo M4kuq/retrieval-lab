@@ -7,9 +7,7 @@ from retrieval_lab.cli.app import main
 
 def _bundle(tmp_path: Path) -> Path:
     bundle = tmp_path / "bundle"
-    DatasetDraft([DraftQuery("q-1", "which document is relevant?")]).save_bundle(
-        bundle
-    )
+    DatasetDraft([DraftQuery("q-1", "which document is relevant?")]).save_bundle(bundle)
     return bundle
 
 

@@ -69,13 +69,16 @@ class DatasetDraftStatus:
     def to_json(self) -> str:
         """Return strict deterministic JSON with a trailing newline."""
 
-        return json.dumps(
-            self.to_dict(),
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ) + "\n"
+        return (
+            json.dumps(
+                self.to_dict(),
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
 
 
 def load_dataset_draft(bundle: str | Path) -> DatasetDraft:
