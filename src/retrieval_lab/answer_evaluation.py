@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import unicodedata
 from collections import Counter
-from collections.abc import AbstractSet, Sequence
+from collections.abc import Iterable, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from typing import Literal
 
@@ -158,7 +158,7 @@ class AnswerEvaluationResult:
                 )
             if evaluation.query_id in seen:
                 raise EvaluationError(
-                    f"answer evaluation query IDs must be unique; duplicate "
+                    "answer evaluation query IDs must be unique; duplicate "
                     f"{evaluation.query_id!r}"
                 )
             seen.add(evaluation.query_id)
@@ -280,7 +280,7 @@ def evaluate_answer(
         raise EvaluationError("request must be a GenerationRequest")
     if not isinstance(output, GenerationOutput):
         raise EvaluationError("output must be a GenerationOutput")
-    if not (reference.query_id == request.query_id):
+    if reference.query_id != request.query_id:
         raise EvaluationError("reference and request query IDs must match")
 
     answer = output.answer
@@ -465,8 +465,8 @@ def _ratio(numerator: int, denominator: int) -> float:
     return numerator / denominator
 
 
-def _mean(values: Sequence[float] | object) -> float:
-    normalized = tuple(values)  # type: ignore[arg-type]
+def _mean(values: Iterable[float]) -> float:
+    normalized = tuple(values)
     if not normalized:
         raise EvaluationError("cannot calculate mean of empty values")
     if any(not math.isfinite(value) for value in normalized):
@@ -474,10 +474,8 @@ def _mean(values: Sequence[float] | object) -> float:
     return sum(normalized) / len(normalized)
 
 
-def _mean_optional(values: object) -> float | None:
-    normalized = tuple(
-        value for value in values if value is not None  # type: ignore[union-attr]
-    )
+def _mean_optional(values: Iterable[float | None]) -> float | None:
+    normalized = tuple(value for value in values if value is not None)
     if not normalized:
         return None
     return _mean(normalized)
