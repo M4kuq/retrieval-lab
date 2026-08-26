@@ -17,7 +17,9 @@ from retrieval_lab import (
 )
 
 
-def configure_dataset_parser(commands: argparse._SubParsersAction) -> None:
+def configure_dataset_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     """Attach dataset authoring commands to the root CLI parser."""
 
     dataset = commands.add_parser("dataset", help="author and review evaluation data")
