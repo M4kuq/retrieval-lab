@@ -148,10 +148,17 @@ def retrieval_metric_explanations() -> Mapping[str, str]:
     return MappingProxyType(
         {
             "hit_rate": "Whether at least one relevant item appears within the cutoff.",
-            "map": "Mean average precision across queries, rewarding relevant items ranked early.",
+            "map": (
+                "Mean average precision across queries, rewarding relevant items "
+                "ranked early."
+            ),
             "mrr": "Mean reciprocal rank of the first relevant result.",
-            "ndcg": "Normalized discounted cumulative gain, supporting graded relevance.",
-            "precision": "Share of retrieved items within the cutoff that are relevant.",
+            "ndcg": (
+                "Normalized discounted cumulative gain, supporting graded relevance."
+            ),
+            "precision": (
+                "Share of retrieved items within the cutoff that are relevant."
+            ),
             "recall": "Share of known relevant items recovered within the cutoff.",
         }
     )
