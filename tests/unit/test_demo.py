@@ -102,7 +102,8 @@ def test_demo_hit_metadata_is_defensively_copied() -> None:
 def test_compare_rejects_invalid_query(query: object) -> None:
     with pytest.raises(EvaluationError, match="query"):
         compare_retrievers_for_query(
-            [StubRetriever("stub")], query  # type: ignore[arg-type]
+            [StubRetriever("stub")],
+            query,  # type: ignore[arg-type]
         )
 
 
@@ -110,7 +111,9 @@ def test_compare_rejects_invalid_query(query: object) -> None:
 def test_compare_rejects_invalid_top_k(top_k: object) -> None:
     with pytest.raises(EvaluationError, match="top_k"):
         compare_retrievers_for_query(
-            [StubRetriever("stub")], "query", top_k=top_k  # type: ignore[arg-type]
+            [StubRetriever("stub")],
+            "query",
+            top_k=top_k,  # type: ignore[arg-type]
         )
 
 
@@ -139,7 +142,9 @@ def test_compare_rejects_empty_retriever_name() -> None:
 def test_compare_rejects_non_callable_clock() -> None:
     with pytest.raises(EvaluationError, match="clock"):
         compare_retrievers_for_query(
-            [StubRetriever("stub")], "query", clock=1  # type: ignore[arg-type]
+            [StubRetriever("stub")],
+            "query",
+            clock=1,  # type: ignore[arg-type]
         )
 
 
