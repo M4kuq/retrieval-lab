@@ -102,6 +102,14 @@ from retrieval_lab.retrievers import (
     evaluate_retrievers,
 )
 from retrieval_lab.runner import EvaluationRunner
+from retrieval_lab.synthetic import (
+    CallableSyntheticGenerator,
+    SyntheticGenerateCallable,
+    SyntheticQueryGenerator,
+    generate_synthetic_draft,
+    mark_draft_in_review,
+    mark_draft_reviewed,
+)
 
 __all__ = [
     "AsyncCallableRetriever",
@@ -110,6 +118,7 @@ __all__ = [
     "BM25RetrieverConfig",
     "BaseRetriever",
     "CallableRetriever",
+    "CallableSyntheticGenerator",
     "Chunk",
     "ChunkerConfig",
     "ComparabilityIssue",
@@ -175,6 +184,8 @@ __all__ = [
     "RetrieverMetrics",
     "RunComparison",
     "SearchResult",
+    "SyntheticGenerateCallable",
+    "SyntheticQueryGenerator",
     "ValidationResult",
     "check_comparability",
     "compare_result_files",
@@ -184,12 +195,15 @@ __all__ = [
     "evaluate_quality_gates",
     "evaluate_results",
     "evaluate_retrievers",
+    "generate_synthetic_draft",
     "initialize_project",
     "inspect_dataset",
     "inspect_result",
     "load_config",
     "load_documents",
     "load_result",
+    "mark_draft_in_review",
+    "mark_draft_reviewed",
     "run_configured_experiment",
     "validate_config_inputs",
     "validate_dataset",
