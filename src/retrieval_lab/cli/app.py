@@ -25,6 +25,7 @@ from retrieval_lab import (
     run_configured_experiment,
     validate_config_inputs,
 )
+from retrieval_lab.cli.dataset import configure_dataset_parser, run_dataset_command
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,6 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--baseline", type=Path)
     gate.add_argument("--json", dest="json_output", action="store_true")
     gate.add_argument("--debug", action="store_true")
+
+    configure_dataset_parser(commands)
     return parser
 
 
@@ -132,6 +135,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _emit_gate(gate_output, json_output=args.json_output)
             return 0 if gate_output.report.passed else 1
+        if args.command == "dataset":
+            return run_dataset_command(args)
         parser.error("a command is required")
     except (ConfigurationError, CorpusValidationError, DatasetValidationError) as exc:
         _write_error(_input_error_message(exc), debug=_is_debug(args))
