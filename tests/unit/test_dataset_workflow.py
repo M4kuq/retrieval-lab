@@ -97,7 +97,7 @@ def test_complete_review_requires_all_queries_complete(tmp_path: Path) -> None:
         [DraftQuery("q-1", "first"), DraftQuery("q-2", "second")]
     ).save_bundle(bundle)
 
-    with pytest.raises(DatasetValidationError, match="still pending|pending"):
+    with pytest.raises(DatasetValidationError, match="pending"):
         review_dataset_query(
             bundle,
             query_id="q-1",
