@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import unicodedata
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -36,7 +37,8 @@ class DatasetProvenance:
             )
         if self.review_status not in {"unreviewed", "in_review", "reviewed"}:
             raise DatasetValidationError(
-                "DatasetProvenance.review_status must be unreviewed, in_review, or reviewed"
+                "DatasetProvenance.review_status must be unreviewed, in_review, "
+                "or reviewed"
             )
         for name in ("generator", "notes"):
             value = getattr(self, name)
@@ -109,7 +111,10 @@ class DraftQuery:
         object.__setattr__(self, "relevance", MappingProxyType(normalized_relevance))
 
         if self.reference_answer is not None:
-            if not isinstance(self.reference_answer, str) or not self.reference_answer.strip():
+            if (
+                not isinstance(self.reference_answer, str)
+                or not self.reference_answer.strip()
+            ):
                 raise DatasetValidationError(
                     "DraftQuery.reference_answer must be non-empty or None"
                 )
@@ -375,11 +380,11 @@ def _write_text(path: Path, content: str) -> None:
         temporary.write_text(content, encoding="utf-8", newline="\n")
         temporary.replace(path)
     except OSError as exc:
-        try:
+        with suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise DatasetValidationError(f"cannot write dataset artifact {path}: {exc}") from exc
+        raise DatasetValidationError(
+            f"cannot write dataset artifact {path}: {exc}"
+        ) from exc
 
 
 __all__ = [
