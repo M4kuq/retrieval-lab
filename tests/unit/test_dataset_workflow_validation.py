@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from retrieval_lab import DatasetDraft, DatasetProvenance, DraftQuery
+from retrieval_lab import DatasetDraft, DraftQuery
 from retrieval_lab.dataset_workflow import (
     dataset_draft_status,
     finalize_dataset_bundle,
