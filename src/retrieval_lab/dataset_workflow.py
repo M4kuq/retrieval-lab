@@ -10,9 +10,12 @@ from typing import cast
 
 from retrieval_lab.dataset_authoring import (
     DatasetDraft,
+    DatasetOrigin,
     DatasetProvenance,
+    DatasetReviewStatus,
     DraftQuery,
 )
+from retrieval_lab.datasets import RelevanceLevel
 from retrieval_lab.domain._validation import normalize_json_mapping
 from retrieval_lab.domain.json_types import JSONValue
 from retrieval_lab.exceptions import DatasetValidationError
@@ -30,7 +33,7 @@ class DatasetDraftStatus:
     query_count: int
     complete_query_count: int
     pending_query_ids: tuple[str, ...]
-    relevance_level: str
+    relevance_level: RelevanceLevel
     origin: str
     review_status: str
     reliability: str
@@ -179,7 +182,9 @@ def _bundle_directory(value: str | Path) -> Path:
     try:
         path = Path(value)
     except TypeError as exc:
-        raise DatasetValidationError("dataset bundle path must be a string or Path") from exc
+        raise DatasetValidationError(
+            "dataset bundle path must be a string or Path"
+        ) from exc
     try:
         if not path.is_dir():
             raise DatasetValidationError(
@@ -288,7 +293,7 @@ def _parse_draft_record(
 
 def _parse_manifest(
     manifest: Mapping[str, object],
-) -> tuple[DatasetProvenance, str, int, tuple[str, ...]]:
+) -> tuple[DatasetProvenance, RelevanceLevel, int, tuple[str, ...]]:
     expected = {
         "schema_version",
         "relevance_level",
@@ -309,7 +314,11 @@ def _parse_manifest(
             "dataset manifest relevance_level must be document or chunk"
         )
     query_count = manifest["query_count"]
-    if isinstance(query_count, bool) or not isinstance(query_count, int) or query_count < 0:
+    if (
+        isinstance(query_count, bool)
+        or not isinstance(query_count, int)
+        or query_count < 0
+    ):
         raise DatasetValidationError(
             "dataset manifest query_count must be an integer >= 0"
         )
@@ -328,7 +337,12 @@ def _parse_manifest(
     if not isinstance(provenance_value, dict):
         raise DatasetValidationError("dataset manifest provenance must be an object")
     provenance = _parse_provenance(provenance_value)
-    return provenance, cast(str, relevance_level), query_count, tuple(pending)
+    return (
+        provenance,
+        cast(RelevanceLevel, relevance_level),
+        query_count,
+        tuple(pending),
+    )
 
 
 def _parse_provenance(value: Mapping[str, object]) -> DatasetProvenance:
@@ -342,15 +356,28 @@ def _parse_provenance(value: Mapping[str, object]) -> DatasetProvenance:
     }
     if set(value) != expected:
         raise DatasetValidationError("dataset manifest provenance fields are invalid")
-    try:
-        provenance = DatasetProvenance(
-            origin=cast(object, value["origin"]),  # type: ignore[arg-type]
-            review_status=cast(object, value["review_status"]),  # type: ignore[arg-type]
-            generator=cast(str | None, value["generator"]),
-            notes=cast(str | None, value["notes"]),
+    origin = value["origin"]
+    review_status = value["review_status"]
+    if not isinstance(origin, str) or not isinstance(review_status, str):
+        raise DatasetValidationError(
+            "dataset manifest provenance origin and review_status must be strings"
         )
-    except DatasetValidationError:
-        raise
+    generator = value["generator"]
+    notes = value["notes"]
+    if generator is not None and not isinstance(generator, str):
+        raise DatasetValidationError(
+            "dataset manifest provenance generator must be a string or null"
+        )
+    if notes is not None and not isinstance(notes, str):
+        raise DatasetValidationError(
+            "dataset manifest provenance notes must be a string or null"
+        )
+    provenance = DatasetProvenance(
+        origin=cast(DatasetOrigin, origin),
+        review_status=cast(DatasetReviewStatus, review_status),
+        generator=generator,
+        notes=notes,
+    )
     if value["human_reviewed"] is not provenance.human_reviewed:
         raise DatasetValidationError(
             "dataset manifest human_reviewed conflicts with review_status"
@@ -370,7 +397,9 @@ def _validate_relevance_mapping(value: Mapping[str, int]) -> dict[str, int]:
         if not isinstance(identifier, str) or not identifier.strip():
             raise DatasetValidationError("review relevance IDs must be non-empty")
         if isinstance(grade, bool) or not isinstance(grade, int) or grade < 1:
-            raise DatasetValidationError("review relevance grades must be integers >= 1")
+            raise DatasetValidationError(
+                "review relevance grades must be integers >= 1"
+            )
         normalized[identifier] = grade
     return normalized
 
