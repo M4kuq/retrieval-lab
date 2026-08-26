@@ -44,6 +44,13 @@ from retrieval_lab.config import (
     RetrievalConfig,
     load_config,
 )
+from retrieval_lab.dataset_authoring import (
+    DatasetDraft,
+    DatasetOrigin,
+    DatasetProvenance,
+    DatasetReviewStatus,
+    DraftQuery,
+)
 from retrieval_lab.dataset_inspection import (
     DatasetInspectionCode,
     DatasetInspectionIssue,
@@ -115,13 +122,18 @@ __all__ = [
     "CorpusConfig",
     "CorpusValidationError",
     "DatasetConfig",
+    "DatasetDraft",
     "DatasetInspectionCode",
     "DatasetInspectionIssue",
     "DatasetInspectionReport",
+    "DatasetOrigin",
+    "DatasetProvenance",
+    "DatasetReviewStatus",
     "DatasetValidationError",
     "DenseRetriever",
     "DenseRetrieverConfig",
     "Document",
+    "DraftQuery",
     "EmbeddingBackend",
     "EmbeddingModelMetadata",
     "EvaluationConfig",
