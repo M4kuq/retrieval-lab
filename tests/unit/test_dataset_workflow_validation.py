@@ -25,9 +25,7 @@ def _manifest(bundle: Path) -> dict[str, object]:
 
 
 def _write_manifest(bundle: Path, value: object) -> None:
-    (bundle / "dataset-manifest.json").write_text(
-        json.dumps(value), encoding="utf-8"
-    )
+    (bundle / "dataset-manifest.json").write_text(json.dumps(value), encoding="utf-8")
 
 
 def _write_dataset(bundle: Path, content: str) -> None:
@@ -63,9 +61,9 @@ def test_manifest_pending_ids_must_match_jsonl(tmp_path: Path) -> None:
 
 def test_review_rejects_chunk_level_draft(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
-    DatasetDraft(
-        [DraftQuery("q-1", "query")], relevance_level="chunk"
-    ).save_bundle(bundle)
+    DatasetDraft([DraftQuery("q-1", "query")], relevance_level="chunk").save_bundle(
+        bundle
+    )
 
     with pytest.raises(DatasetValidationError, match="document-level"):
         review_dataset_query(
