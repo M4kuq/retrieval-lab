@@ -1,5 +1,15 @@
 """Public Python API for Retrieval Lab."""
 
+from retrieval_lab.answer_evaluation import (
+    AnswerEvaluation,
+    AnswerEvaluationResult,
+    AnswerFailureType,
+    AnswerReference,
+    evaluate_answer,
+    evaluate_answers,
+    exact_match,
+    token_f1,
+)
 from retrieval_lab.application import (
     ComparisonOutput,
     ComparisonRow,
@@ -97,6 +107,17 @@ from retrieval_lab.exceptions import (
     RetrievalLabError,
     RetrieverContractError,
 )
+from retrieval_lab.generation import (
+    CallableGenerator,
+    GenerateCallable,
+    GeneratedAnswer,
+    GenerationContext,
+    GenerationOutput,
+    GenerationRequest,
+    Generator,
+    MockGenerator,
+    generate_answer,
+)
 from retrieval_lab.loaders import load_documents
 from retrieval_lab.quality import evaluate_quality_gates
 from retrieval_lab.retrievers import (
@@ -126,11 +147,16 @@ from retrieval_lab.synthetic import (
 )
 
 __all__ = [
+    "AnswerEvaluation",
+    "AnswerEvaluationResult",
+    "AnswerFailureType",
+    "AnswerReference",
     "AsyncCallableRetriever",
     "AsyncRetriever",
     "BM25Retriever",
     "BM25RetrieverConfig",
     "BaseRetriever",
+    "CallableGenerator",
     "CallableRetriever",
     "CallableSyntheticGenerator",
     "Chunk",
@@ -173,6 +199,12 @@ __all__ = [
     "ExperimentOutput",
     "FixedSizeChunker",
     "GateOutput",
+    "GenerateCallable",
+    "GeneratedAnswer",
+    "GenerationContext",
+    "GenerationOutput",
+    "GenerationRequest",
+    "Generator",
     "HybridRetriever",
     "HybridRetrieverConfig",
     "IncomparableRunError",
@@ -183,6 +215,7 @@ __all__ = [
     "LatencyStats",
     "MetricComparison",
     "MetricDelta",
+    "MockGenerator",
     "OptionalDependencyError",
     "QualityGateCheck",
     "QualityGateConfig",
@@ -210,12 +243,16 @@ __all__ = [
     "compare_retrievers_for_query",
     "compare_runs",
     "dataset_draft_status",
+    "evaluate_answer",
+    "evaluate_answers",
     "evaluate_async_retrievers",
     "evaluate_configured_quality_gates",
     "evaluate_quality_gates",
     "evaluate_results",
     "evaluate_retrievers",
+    "exact_match",
     "finalize_dataset_bundle",
+    "generate_answer",
     "generate_synthetic_draft",
     "initialize_project",
     "inspect_dataset",
@@ -229,6 +266,7 @@ __all__ = [
     "retrieval_metric_explanations",
     "review_dataset_query",
     "run_configured_experiment",
+    "token_f1",
     "validate_config_inputs",
     "validate_dataset",
 ]

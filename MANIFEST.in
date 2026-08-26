@@ -5,6 +5,7 @@ global-exclude README.md
 include docs/index.md
 include docs/tutorial.md
 include docs/demo.md
+include docs/answer-evaluation.md
 include docs/faq.md
 include docs/api-minimum.md
 include docs/evaluation-spec.md

@@ -43,6 +43,7 @@ def test_release_metadata_and_manifest_are_explicit() -> None:
             "index.md",
             "tutorial.md",
             "demo.md",
+            "answer-evaluation.md",
             "faq.md",
             "api-minimum.md",
             "evaluation-spec.md",
@@ -82,6 +83,7 @@ def test_mkdocs_nav_is_user_facing_only() -> None:
         "index.md",
         "tutorial.md",
         "demo.md",
+        "answer-evaluation.md",
         "faq.md",
         "ci-regression.md",
         "api-minimum.md",
@@ -120,6 +122,7 @@ def test_mkdocs_build_excludes_protected_documents(tmp_path: Path) -> None:
     assert (site_dir / "index.html").is_file()
     assert (site_dir / "benchmark" / "index.html").is_file()
     assert (site_dir / "demo" / "index.html").is_file()
+    assert (site_dir / "answer-evaluation" / "index.html").is_file()
     generated = tuple(
         path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*")
     )
@@ -225,6 +228,7 @@ def test_clean_build_artifacts_have_expected_content_and_metadata(
             "docs/index.md",
             "docs/benchmark.md",
             "docs/demo.md",
+            "docs/answer-evaluation.md",
             "docs/release-notes-0.1.0rc1.md",
             "examples/evaluation.jsonl",
             "examples/streamlit_demo.py",
