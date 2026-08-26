@@ -65,6 +65,13 @@ from retrieval_lab.dataset_workflow import (
     review_dataset_query,
 )
 from retrieval_lab.datasets import EvaluationDataset, RelevanceLevel, validate_dataset
+from retrieval_lab.demo import (
+    DemoComparison,
+    DemoRetrieverView,
+    DemoSearchHit,
+    compare_retrievers_for_query,
+    retrieval_metric_explanations,
+)
 from retrieval_lab.domain import (
     Chunk,
     ConstraintType,
@@ -147,6 +154,9 @@ __all__ = [
     "DatasetProvenance",
     "DatasetReviewStatus",
     "DatasetValidationError",
+    "DemoComparison",
+    "DemoRetrieverView",
+    "DemoSearchHit",
     "DenseRetriever",
     "DenseRetrieverConfig",
     "Document",
@@ -197,6 +207,7 @@ __all__ = [
     "ValidationResult",
     "check_comparability",
     "compare_result_files",
+    "compare_retrievers_for_query",
     "compare_runs",
     "dataset_draft_status",
     "evaluate_async_retrievers",
@@ -215,6 +226,7 @@ __all__ = [
     "load_result",
     "mark_draft_in_review",
     "mark_draft_reviewed",
+    "retrieval_metric_explanations",
     "review_dataset_query",
     "run_configured_experiment",
     "validate_config_inputs",

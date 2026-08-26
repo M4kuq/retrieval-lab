@@ -13,6 +13,7 @@ theme:
 nav:
   - Home: index.md
   - Tutorial: tutorial.md
+  - Public demo: demo.md
   - FAQ: faq.md
   - CI regression gates: ci-regression.md
   - API minimum: api-minimum.md
