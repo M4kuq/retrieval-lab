@@ -153,9 +153,7 @@ def _validate_documents(documents: Sequence[Document]) -> tuple[Document, ...]:
     seen: set[str] = set()
     for position, document in enumerate(normalized):
         if not isinstance(document, Document):
-            raise DatasetValidationError(
-                f"documents[{position}] must be a Document"
-            )
+            raise DatasetValidationError(f"documents[{position}] must be a Document")
         if document.id in seen:
             raise DatasetValidationError(
                 f"document IDs must be unique; duplicate {document.id!r}"

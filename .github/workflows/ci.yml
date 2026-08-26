@@ -20,17 +20,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --extra dev
-      - name: Format synthetic files for diagnosis
-        run: |
-          uv run ruff format \
-            src/retrieval_lab/synthetic.py \
-            tests/unit/test_synthetic.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ruff-formatted-synthetic
-          path: |
-            src/retrieval_lab/synthetic.py
-            tests/unit/test_synthetic.py
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src
