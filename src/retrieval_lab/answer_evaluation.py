@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable, Sequence, Set as AbstractSet
+from collections.abc import Iterable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Literal
 
@@ -179,9 +180,7 @@ class AnswerEvaluationResult:
     def mean_required_fact_coverage(self) -> float | None:
         """Return mean required-fact coverage when facts were supplied."""
 
-        return _mean_optional(
-            item.required_fact_coverage for item in self.evaluations
-        )
+        return _mean_optional(item.required_fact_coverage for item in self.evaluations)
 
     @property
     def empty_answer_rate(self) -> float:
