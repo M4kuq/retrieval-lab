@@ -53,9 +53,10 @@ def _output(
 
 
 def test_exact_match_normalizes_case_width_and_whitespace() -> None:
-    assert exact_match(
-        "  \uff21\uff37\uff33  Secrets Manager ", "aws secrets manager"
-    ) == 1.0
+    assert (
+        exact_match("  \uff21\uff37\uff33  Secrets Manager ", "aws secrets manager")
+        == 1.0
+    )
     assert exact_match("AWS S3", "AWS Secrets Manager") == 0.0
 
 
@@ -305,7 +306,9 @@ def test_answer_reference_rejects_invalid_query_id(value: object) -> None:
         AnswerReference(value)  # type: ignore[arg-type]
 
 
-def test_answer_reference_rejects_duplicate_required_facts_after_normalization() -> None:
+def test_answer_reference_rejects_duplicate_required_facts_after_normalization() -> (
+    None
+):
     with pytest.raises(EvaluationError, match="duplicate"):
         AnswerReference(
             "q-1",

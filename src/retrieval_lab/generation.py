@@ -7,7 +7,6 @@ import time
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import Protocol
 
 from retrieval_lab.domain._validation import normalize_json_mapping
@@ -252,9 +251,7 @@ def generate_answer(
     except EvaluationError:
         raise
     except Exception as exc:
-        raise EvaluationError(
-            f"generator {generator_name!r} failed: {exc}"
-        ) from exc
+        raise EvaluationError(f"generator {generator_name!r} failed: {exc}") from exc
     end = _read_clock(clock)
     if not isinstance(answer, GeneratedAnswer):
         raise EvaluationError(

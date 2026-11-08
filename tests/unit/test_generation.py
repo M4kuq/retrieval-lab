@@ -56,7 +56,9 @@ def test_generation_context_rejects_empty_required_fields(field: str) -> None:
         GenerationContext(**values)
 
 
-def test_generation_request_allows_empty_contexts_for_retrieval_failure_analysis() -> None:
+def test_generation_request_allows_empty_contexts_for_retrieval_failure_analysis() -> (
+    None
+):
     request = GenerationRequest("q-1", "query")
 
     assert request.contexts == ()
