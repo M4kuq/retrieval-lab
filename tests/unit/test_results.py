@@ -40,17 +40,23 @@ def _retriever_metrics() -> RetrieverMetrics:
     )
 
 
-def _result_kwargs() -> dict[str, object]:
-    return {
-        "run_id": "run-日本語",
-        "metrics": {"keyword": _retriever_metrics()},
-        "query_results": {"keyword": [_query_evaluation()]},
-        "manifest": {"dataset": "日本語データ", "seed": 42},
-    }
-
-
 def _result() -> EvaluationResult:
-    return EvaluationResult(**_result_kwargs())  # type: ignore[arg-type]
+    return EvaluationResult(
+        run_id="run-日本語",
+        metrics={"keyword": _retriever_metrics()},
+        query_results={"keyword": [_query_evaluation()]},
+        manifest={"dataset": "日本語データ", "seed": 42},
+    )
+
+
+def _result_kwargs() -> dict[str, object]:
+    result = _result()
+    return {
+        "run_id": result.run_id,
+        "metrics": result.metrics,
+        "query_results": result.query_results,
+        "manifest": result.manifest,
+    }
 
 
 def _latency_stats() -> LatencyStats:
@@ -64,23 +70,40 @@ def _latency_stats() -> LatencyStats:
     )
 
 
+def _timed_result(
+    quality_gates: list[QualityGateResult] | None = None,
+) -> EvaluationResult:
+    return EvaluationResult(
+        run_id="run-日本語",
+        metrics={"keyword": _retriever_metrics()},
+        query_results={
+            "keyword": [
+                QueryEvaluation(
+                    query_id="q-1",
+                    retrieved_ids=("doc-2", "doc-1"),
+                    metrics_by_cutoff={
+                        1: {"recall": 0.0, "hit_rate": 0.0},
+                        2: {"recall": 1.0, "hit_rate": 1.0},
+                    },
+                    search_latency_ms=2.0,
+                )
+            ]
+        },
+        manifest={"dataset": "日本語データ", "seed": 42},
+        latency={"keyword": _latency_stats()},
+        quality_gates=quality_gates,
+    )
+
+
 def _timed_kwargs() -> dict[str, object]:
-    kwargs = _result_kwargs()
-    kwargs["query_results"] = {
-        "keyword": [
-            QueryEvaluation(
-                query_id="q-1",
-                retrieved_ids=("doc-2", "doc-1"),
-                metrics_by_cutoff={
-                    1: {"recall": 0.0, "hit_rate": 0.0},
-                    2: {"recall": 1.0, "hit_rate": 1.0},
-                },
-                search_latency_ms=2.0,
-            )
-        ]
+    result = _timed_result()
+    return {
+        "run_id": result.run_id,
+        "metrics": result.metrics,
+        "query_results": result.query_results,
+        "manifest": result.manifest,
+        "latency": result.latency,
     }
-    kwargs["latency"] = {"keyword": _latency_stats()}
-    return kwargs
 
 
 def _make_gate(
@@ -909,128 +932,127 @@ def test_query_evaluation_serializes_warnings_without_latency() -> None:
 
 
 @pytest.mark.parametrize(
-    ("case", "expected"),
+    "case",
     [
-        ("both-latency-keys", "provide only one of latency or latency_stats"),
-        ("empty-latency", "EvaluationResult.latency must not be empty"),
-        (
-            "latency-wrong-type",
-            r"EvaluationResult\.latency\['keyword'\] must be LatencyStats",
-        ),
-        (
-            "latency-retriever-mismatch",
-            "EvaluationResult latency and metrics must contain "
-            "the same retriever names",
-        ),
-        (
-            "empty-query-results",
-            "EvaluationResult.query_results must not be empty",
-        ),
-        (
-            "query-results-not-sequence",
-            r"EvaluationResult\.query_results\['keyword'\] must be a sequence",
-        ),
+        "both-latency-keys",
+        "empty-latency",
+        "latency-wrong-type",
+        "latency-retriever-mismatch",
+        "empty-query-results",
+        "query-results-not-sequence",
     ],
 )
-def test_result_rejects_invalid_latency_and_query_results(
-    case: str, expected: str
-) -> None:
-    overrides_by_case: dict[str, dict[str, object]] = {
-        "both-latency-keys": {
+def test_result_rejects_invalid_latency_and_query_results(case: str) -> None:
+    expected_by_case = {
+        "both-latency-keys": "provide only one of latency or latency_stats",
+        "empty-latency": "EvaluationResult.latency must not be empty",
+        "latency-wrong-type": (
+            r"EvaluationResult\.latency\['keyword'\] must be LatencyStats"
+        ),
+        "latency-retriever-mismatch": (
+            "EvaluationResult latency and metrics must contain the same retriever names"
+        ),
+        "empty-query-results": "EvaluationResult.query_results must not be empty",
+        "query-results-not-sequence": (
+            r"EvaluationResult\.query_results\['keyword'\] must be a sequence"
+        ),
+    }
+    overrides_factories: dict[str, Callable[[], dict[str, object]]] = {
+        "both-latency-keys": lambda: {
             "latency": {"keyword": _latency_stats()},
             "latency_stats": {"keyword": _latency_stats()},
         },
-        "empty-latency": {"latency": {}},
-        "latency-wrong-type": {"latency": {"keyword": object()}},
-        "latency-retriever-mismatch": {"latency": {"bm25": _latency_stats()}},
-        "empty-query-results": {"query_results": {}},
-        "query-results-not-sequence": {"query_results": {"keyword": "q-1"}},
+        "empty-latency": lambda: {"latency": {}},
+        "latency-wrong-type": lambda: {"latency": {"keyword": object()}},
+        "latency-retriever-mismatch": lambda: {"latency": {"bm25": _latency_stats()}},
+        "empty-query-results": lambda: {"query_results": {}},
+        "query-results-not-sequence": lambda: {"query_results": {"keyword": "q-1"}},
     }
     kwargs = _timed_kwargs()
-    kwargs.update(overrides_by_case[case])
+    kwargs.update(overrides_factories[case]())
 
-    with pytest.raises(EvaluationError, match=expected):
+    with pytest.raises(EvaluationError, match=expected_by_case[case]):
         EvaluationResult(**kwargs)  # type: ignore[arg-type]
 
 
 def test_result_latency_stats_alias_returns_latency() -> None:
-    result = EvaluationResult(**_timed_kwargs())  # type: ignore[arg-type]
+    result = _timed_result()
 
     assert result.latency_stats is result.latency
     assert result.latency_stats["keyword"].mean_ms == 2.0
 
 
 @pytest.mark.parametrize(
-    ("case", "expected"),
+    "case",
     [
-        (
-            "gates-not-sequence",
-            "EvaluationResult.quality_gates must be a sequence",
-        ),
-        (
-            "gates-wrong-item-type",
-            "EvaluationResult.quality_gates must contain QualityGateResult",
-        ),
-        (
-            "candidate-mismatch",
-            "EvaluationResult.quality_gates candidate run ID differs",
-        ),
-        (
-            "duplicate-index",
-            "EvaluationResult.quality_gates must not contain duplicate gate indexes",
-        ),
-        (
-            "unavailable-retriever",
-            "EvaluationResult quality gate references an unavailable retriever",
-        ),
-        (
-            "unavailable-latency",
-            "EvaluationResult quality gate references unavailable latency",
-        ),
-        ("metric-unknown-name", "EvaluationResult quality gate metric is invalid"),
-        ("metric-empty-name", "EvaluationResult quality gate metric is invalid"),
-        (
-            "metric-non-digit-cutoff",
-            "EvaluationResult quality gate metric is invalid",
-        ),
-        (
-            "metric-leading-zero-cutoff",
-            "EvaluationResult quality gate metric is invalid",
-        ),
-        ("metric-zero-cutoff", "EvaluationResult quality gate metric is invalid"),
-        (
-            "metric-overflow-cutoff",
-            "EvaluationResult quality gate metric is invalid",
-        ),
+        "gates-not-sequence",
+        "gates-wrong-item-type",
+        "candidate-mismatch",
+        "duplicate-index",
+        "unavailable-retriever",
+        "unavailable-latency",
+        "metric-unknown-name",
+        "metric-empty-name",
+        "metric-non-digit-cutoff",
+        "metric-leading-zero-cutoff",
+        "metric-zero-cutoff",
+        "metric-overflow-cutoff",
     ],
 )
-def test_result_rejects_invalid_quality_gates(case: str, expected: str) -> None:
-    gates_by_case: dict[str, object] = {
-        "gates-not-sequence": "keyword",
-        "gates-wrong-item-type": [object()],
-        "candidate-mismatch": [_make_gate(candidate="other-run")],
-        "duplicate-index": [_make_gate(), _make_gate(metric="hit_rate@1")],
-        "unavailable-retriever": [_make_gate(retriever="bm25")],
-        "unavailable-latency": [_latency_gate()],
-        "metric-unknown-name": [_make_gate(metric="bogus")],
-        "metric-empty-name": [_make_gate(metric="@1")],
-        "metric-non-digit-cutoff": [_make_gate(metric="recall@x")],
-        "metric-leading-zero-cutoff": [_make_gate(metric="recall@01")],
-        "metric-zero-cutoff": [_make_gate(metric="recall@0")],
-        "metric-overflow-cutoff": [_make_gate(metric="recall@" + "9" * 5000)],
+def test_result_rejects_invalid_quality_gates(case: str) -> None:
+    expected_by_case = {
+        "gates-not-sequence": (r"EvaluationResult\.quality_gates must be a sequence"),
+        "gates-wrong-item-type": (
+            r"EvaluationResult\.quality_gates must contain QualityGateResult"
+        ),
+        "candidate-mismatch": (
+            r"EvaluationResult\.quality_gates candidate run ID differs"
+        ),
+        "duplicate-index": (
+            r"EvaluationResult\.quality_gates must not contain "
+            "duplicate gate indexes"
+        ),
+        "unavailable-retriever": (
+            "EvaluationResult quality gate references an unavailable retriever"
+        ),
+        "unavailable-latency": (
+            "EvaluationResult quality gate references unavailable latency"
+        ),
+        "metric-unknown-name": "EvaluationResult quality gate metric is invalid",
+        "metric-empty-name": "EvaluationResult quality gate metric is invalid",
+        "metric-non-digit-cutoff": ("EvaluationResult quality gate metric is invalid"),
+        "metric-leading-zero-cutoff": (
+            "EvaluationResult quality gate metric is invalid"
+        ),
+        "metric-zero-cutoff": "EvaluationResult quality gate metric is invalid",
+        "metric-overflow-cutoff": ("EvaluationResult quality gate metric is invalid"),
+    }
+    gates_factories: dict[str, Callable[[], object]] = {
+        "gates-not-sequence": lambda: "keyword",
+        "gates-wrong-item-type": lambda: [object()],
+        "candidate-mismatch": lambda: [_make_gate(candidate="other-run")],
+        "duplicate-index": lambda: [
+            _make_gate(),
+            _make_gate(metric="hit_rate@1"),
+        ],
+        "unavailable-retriever": lambda: [_make_gate(retriever="bm25")],
+        "unavailable-latency": lambda: [_latency_gate()],
+        "metric-unknown-name": lambda: [_make_gate(metric="bogus")],
+        "metric-empty-name": lambda: [_make_gate(metric="@1")],
+        "metric-non-digit-cutoff": lambda: [_make_gate(metric="recall@x")],
+        "metric-leading-zero-cutoff": lambda: [_make_gate(metric="recall@01")],
+        "metric-zero-cutoff": lambda: [_make_gate(metric="recall@0")],
+        "metric-overflow-cutoff": lambda: [_make_gate(metric="recall@" + "9" * 5000)],
     }
     kwargs = _result_kwargs()
-    kwargs["quality_gates"] = gates_by_case[case]
+    kwargs["quality_gates"] = gates_factories[case]()
 
-    with pytest.raises(EvaluationError, match=expected):
+    with pytest.raises(EvaluationError, match=expected_by_case[case]):
         EvaluationResult(**kwargs)  # type: ignore[arg-type]
 
 
 def test_result_accepts_latency_quality_gate() -> None:
-    kwargs = _timed_kwargs()
-    kwargs["quality_gates"] = [_latency_gate()]
-
-    result = EvaluationResult(**kwargs)  # type: ignore[arg-type]
+    result = _timed_result(quality_gates=[_latency_gate()])
 
     assert result.quality_gates[0].metric == "latency_mean_ms"
 
