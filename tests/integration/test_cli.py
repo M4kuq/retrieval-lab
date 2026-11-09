@@ -449,9 +449,7 @@ def test_cli_without_command_reports_usage_error(
     with pytest.raises(SystemExit) as raised:
         main([])
     assert raised.value.code == 2
-    assert "the following arguments are required: command" in (
-        capsys.readouterr().err
-    )
+    assert "the following arguments are required: command" in (capsys.readouterr().err)
 
 
 def test_cli_maps_builtin_exceptions_to_input_error(
