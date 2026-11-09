@@ -112,13 +112,20 @@ def test_package_root_exposes_no_undocumented_names() -> None:
     assert exposed - submodules == set(retrieval_lab.__all__)
 
 
-def test_every_export_is_listed_in_the_public_imports_document() -> None:
+def test_public_imports_document_lists_exactly_the_exports() -> None:
     text = API_DOCUMENT.read_text(encoding="utf-8")
     start = text.index("## Public imports")
     end = text.index("## ", start + len("## Public imports"))
-    documented = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", text[start:end]))
-    for name in retrieval_lab.__all__:
-        assert name in documented, name
+    documented: set[str] = set()
+    in_bullet = False
+    for line in text[start:end].splitlines():
+        if line.startswith("- "):
+            in_bullet = True
+        elif line and not line[0].isspace():
+            in_bullet = False
+        if in_bullet:
+            documented.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
+    assert documented == set(retrieval_lab.__all__)
 
 
 def test_distribution_is_typed() -> None:
