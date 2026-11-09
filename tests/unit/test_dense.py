@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import cast
@@ -756,7 +757,7 @@ def test_inner_product_overflow_is_a_typed_error() -> None:
 
 
 def test_normalization_rejects_non_finite_norms() -> None:
-    largest = 1.7976931348623157e308
+    largest = sys.float_info.max
     backend = FakeEmbeddingBackend({("passage: document",): [[largest, largest]]})
     retriever = DenseRetriever(backend=backend)
 
@@ -868,9 +869,12 @@ def test_cache_identity_float_values_must_be_finite() -> None:
     backend.cache_identity = 2.5
     assert retriever.settings["backend"]["cache_identity_sha256"] != digest
 
-    backend.cache_identity = float("inf")
-    with pytest.raises(RetrieverContractError, match="cache identity must be finite"):
-        _ = retriever.settings
+    for non_finite in (float("inf"), float("-inf"), float("nan")):
+        backend.cache_identity = non_finite
+        with pytest.raises(
+            RetrieverContractError, match="cache identity must be finite"
+        ):
+            _ = retriever.settings
 
 
 def test_cache_identity_rejects_non_string_keys() -> None:
