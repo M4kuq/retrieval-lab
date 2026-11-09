@@ -206,19 +206,23 @@ def test_load_beir_dataset_preserves_unicode_line_separators(tmp_path: Path) -> 
 def test_load_beir_dataset_rejects_invalid_utf8(tmp_path: Path) -> None:
     root = tmp_path / "bad-utf8"
     (root / "qrels").mkdir(parents=True)
-    (root / "corpus.jsonl").write_bytes(b'{"_id": "d1", "text": "\xff"}\n')
+    (root / "corpus.jsonl").write_bytes(
+        b'{"_id": "d0", "text": "fine"}\n{"_id": "d1", "text": "\xff"}\n'
+    )
     (root / "queries.jsonl").write_text(
         '{"_id": "q1", "text": "q"}\n', encoding="utf-8"
     )
     (root / "qrels" / "test.tsv").write_text("q1\td1\t1\n", encoding="utf-8")
-    with pytest.raises(DatasetValidationError, match="not valid UTF-8"):
+    with pytest.raises(DatasetValidationError, match=r"corpus\.jsonl:2:.*UTF-8"):
         load_beir_dataset(root)
 
     (root / "corpus.jsonl").write_text(
         '{"_id": "d1", "text": "ok"}\n', encoding="utf-8"
     )
-    (root / "qrels" / "test.tsv").write_bytes(b"q1\td1\t\xff\n")
-    with pytest.raises(DatasetValidationError, match="not valid UTF-8"):
+    (root / "qrels" / "test.tsv").write_bytes(
+        b"query-id\tcorpus-id\tscore\nq1\td1\t\xff\n"
+    )
+    with pytest.raises(DatasetValidationError, match=r"test\.tsv:2:.*UTF-8"):
         load_beir_dataset(root)
 
 

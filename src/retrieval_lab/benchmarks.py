@@ -227,13 +227,16 @@ def _jsonl_records(path: Path) -> list[tuple[int, dict[str, object]]]:
 
 
 def _iter_lines(path: Path) -> list[tuple[int, str]]:
+    pieces = path.read_bytes().split(b"\n")
     lines: list[tuple[int, str]] = []
-    try:
-        with path.open(encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                lines.append((line_number, line.rstrip("\n")))
-    except UnicodeDecodeError:
-        raise _error(path, len(lines) + 1, "file is not valid UTF-8") from None
+    for line_number, piece in enumerate(pieces, start=1):
+        if line_number == len(pieces) and not piece:
+            break
+        try:
+            text = piece.decode("utf-8")
+        except UnicodeDecodeError:
+            raise _error(path, line_number, "file is not valid UTF-8") from None
+        lines.append((line_number, text.removesuffix("\r")))
     return lines
 
 
