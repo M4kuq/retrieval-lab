@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -201,13 +202,14 @@ def test_load_wraps_path_inspection_failures(
         load_documents(tmp_path)
 
 
-def test_load_rejects_non_sequence_include(tmp_path: Path) -> None:
+@pytest.mark.parametrize("include", ["*.txt", b"*.txt", {"*.txt"}])
+def test_load_rejects_non_sequence_include(tmp_path: Path, include: object) -> None:
     (tmp_path / "a.txt").write_text("a", encoding="utf-8")
 
     with pytest.raises(
         CorpusValidationError, match="include must be a sequence of glob strings"
     ):
-        load_documents(tmp_path, include="*.txt")  # type: ignore[arg-type]
+        load_documents(tmp_path, include=include)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("patterns", [("",), ("  ",), (123,)])
@@ -222,6 +224,7 @@ def test_load_rejects_blank_or_non_string_include_patterns(
         load_documents(tmp_path, include=patterns)  # type: ignore[arg-type]
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFOs")
 def test_load_rejects_non_regular_paths(tmp_path: Path) -> None:
     fifo = tmp_path / "pipe"
     os.mkfifo(fifo)
@@ -240,7 +243,10 @@ def test_discovery_wraps_inspection_failures(
 
     monkeypatch.setattr(Path, "is_file", broken_is_file)
 
-    with pytest.raises(CorpusValidationError, match="cannot inspect corpus"):
+    with pytest.raises(
+        CorpusValidationError,
+        match=rf"cannot inspect corpus {re.escape(str(tmp_path))}: denied",
+    ):
         load_documents(tmp_path)
 
 
@@ -264,21 +270,25 @@ def test_read_failures_are_wrapped(
         load_documents(source)
 
 
-def test_jsonl_rejects_blank_lines(tmp_path: Path) -> None:
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_jsonl_rejects_blank_lines(tmp_path: Path, blank: str) -> None:
     source = tmp_path / "corpus.jsonl"
     source.write_text(
-        '{"id": "a", "text": "x"}\n\n{"id": "b", "text": "y"}\n',
+        f'{{"id": "a", "text": "x"}}\n{blank}\n{{"id": "b", "text": "y"}}\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(CorpusValidationError, match="blank lines are not valid"):
+    with pytest.raises(CorpusValidationError, match=r":2: blank lines are not valid"):
         load_documents(source)
 
 
-def test_jsonl_rejects_non_standard_json_constants(tmp_path: Path) -> None:
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_jsonl_rejects_non_standard_json_constants(
+    tmp_path: Path, constant: str
+) -> None:
     source = tmp_path / "corpus.jsonl"
     source.write_text(
-        '{"id": "a", "text": "x", "metadata": {"score": NaN}}\n',
+        f'{{"id": "a", "text": "x", "metadata": {{"score": {constant}}}}}\n',
         encoding="utf-8",
     )
 
