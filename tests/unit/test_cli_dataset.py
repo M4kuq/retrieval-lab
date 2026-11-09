@@ -205,6 +205,7 @@ def test_dataset_review_prompt_requires_at_least_one_document(
         ([":2"], "--relevant must use ID or ID:GRADE syntax"),
         (["doc-1.md:"], "--relevant must use ID or ID:GRADE syntax"),
         (["doc-1.md:abc"], "--relevant grade must be an integer"),
+        (["a:b"], "--relevant grade must be an integer"),
         (["doc-1.md:0"], "--relevant grade must be >= 1"),
         (["doc-1.md", "doc-1.md:2"], "duplicate --relevant document ID"),
         ([], "at least one relevant document is required"),
