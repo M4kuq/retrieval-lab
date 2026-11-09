@@ -223,3 +223,179 @@ def test_unknown_query_lookup_uses_package_exception() -> None:
         dataset.relevance_for("missing")
     with pytest.raises(DatasetValidationError, match="unknown query_id"):
         dataset.reference_answer_for("missing")
+
+
+def _query() -> EvaluationQuery:
+    return EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"})
+
+
+@pytest.mark.parametrize(
+    ("queries", "expected"),
+    [
+        ("q-1", "queries must be a sequence"),
+        ([], "queries must not be empty"),
+        ([object()], "must be an EvaluationQuery"),
+    ],
+)
+def test_constructor_rejects_invalid_query_collections(
+    queries: object, expected: str
+) -> None:
+    with pytest.raises(DatasetValidationError, match=expected):
+        EvaluationDataset(queries)  # type: ignore[arg-type]
+
+
+def test_validate_dataset_rejects_non_dataset() -> None:
+    with pytest.raises(DatasetValidationError, match="must be an EvaluationDataset"):
+        validate_dataset(object())  # type: ignore[arg-type]
+
+
+def test_constructor_rejects_non_mapping_grades() -> None:
+    with pytest.raises(DatasetValidationError, match="must be a mapping"):
+        EvaluationDataset(
+            [_query()],
+            relevance_grades_by_query=[("q-1", {"doc-1": 1})],  # type: ignore[arg-type]
+        )
+
+
+def test_constructor_rejects_grade_keys_that_do_not_match_queries() -> None:
+    with pytest.raises(DatasetValidationError, match="must exactly match query IDs"):
+        EvaluationDataset(
+            [_query()],
+            relevance_grades_by_query={"q-2": {"doc-1": 1}},
+        )
+
+
+def test_constructor_rejects_non_mapping_per_query_grades() -> None:
+    with pytest.raises(DatasetValidationError, match="must be a mapping"):
+        EvaluationDataset(
+            [_query()],
+            relevance_grades_by_query={"q-1": "doc-1"},  # type: ignore[dict-item]
+        )
+
+
+@pytest.mark.parametrize(
+    ("answers", "expected"),
+    [
+        ("answer", "must be a mapping"),
+        ({"q-2": "answer"}, "unknown query IDs"),
+        ({"q-1": "   "}, "must be non-empty"),
+    ],
+)
+def test_constructor_rejects_invalid_reference_answers(
+    answers: object, expected: str
+) -> None:
+    with pytest.raises(DatasetValidationError, match=expected):
+        EvaluationDataset(
+            [_query()],
+            reference_answers_by_query=answers,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, "documents are required"),
+        ({"documents": "doc-1"}, "documents must be a sequence"),
+        ({"documents": [object()]}, r"documents\[0\] must be a Document"),
+    ],
+)
+def test_validation_rejects_invalid_corpus_arguments(
+    kwargs: dict[str, object], expected: str
+) -> None:
+    dataset = EvaluationDataset([_query()])
+
+    with pytest.raises(CorpusValidationError, match=expected):
+        dataset.validate(**kwargs)  # type: ignore[arg-type]
+
+
+def test_from_jsonl_rejects_non_path_argument() -> None:
+    with pytest.raises(DatasetValidationError, match="must be a string or Path"):
+        EvaluationDataset.from_jsonl(123)  # type: ignore[arg-type]
+
+
+def test_from_jsonl_rejects_directory_path(tmp_path: Path) -> None:
+    with pytest.raises(DatasetValidationError, match="dataset path is not a file"):
+        EvaluationDataset.from_jsonl(tmp_path)
+
+
+def test_from_jsonl_wraps_path_inspection_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "evaluation.jsonl", "{}\n")
+
+    def failing_is_file(self: Path) -> bool:
+        raise OSError("inspection denied")
+
+    monkeypatch.setattr(Path, "is_file", failing_is_file)
+
+    with pytest.raises(DatasetValidationError, match="cannot inspect dataset path"):
+        EvaluationDataset.from_jsonl(source)
+
+
+def test_from_jsonl_wraps_read_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write(tmp_path / "evaluation.jsonl", "{}\n")
+
+    def failing_read_bytes(self: Path) -> bytes:
+        raise OSError("read denied")
+
+    monkeypatch.setattr(Path, "read_bytes", failing_read_bytes)
+
+    with pytest.raises(DatasetValidationError, match="cannot read dataset"):
+        EvaluationDataset.from_jsonl(source)
+
+
+def test_from_jsonl_rejects_blank_line_between_records(tmp_path: Path) -> None:
+    source = _write(
+        tmp_path / "evaluation.jsonl",
+        '{"query_id":"q-1","query":"one","relevant":[{"id":"d","relevance":1}]}\n'
+        "\n"
+        '{"query_id":"q-2","query":"two","relevant":[{"id":"d","relevance":1}]}\n',
+    )
+
+    with pytest.raises(
+        DatasetValidationError, match="blank lines are not valid JSONL records"
+    ):
+        EvaluationDataset.from_jsonl(source)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            '{"query_id":"q-1","query_id":"q-1","query":"x",'
+            '"relevant":[{"id":"d","relevance":1}]}',
+            "duplicate JSON key 'query_id'",
+        ),
+        (
+            '{"query_id":"q-1","query":"x","relevant":[{"id":"d","relevance":1}],'
+            '"metadata":{"score":NaN}}',
+            "non-standard JSON constant 'NaN'",
+        ),
+        (
+            '{"query_id":5,"query":"x","relevant":[{"id":"d","relevance":1}]}',
+            "query_id must be a non-empty string",
+        ),
+        (
+            '{"query_id":"q-1","query":"x","relevant":["doc-1"]}',
+            r"relevant\[0\] must be an object",
+        ),
+        (
+            '{"query_id":"q-1","query":"x","relevant":[{"id":"d"}]}',
+            r"relevant\[0\] fields are invalid",
+        ),
+        (
+            '{"query_id":"q-1","query":"x","relevant":[{"id":"d","relevance":1}],'
+            '"metadata":"text"}',
+            "metadata",
+        ),
+    ],
+)
+def test_from_jsonl_rejects_invalid_records(
+    tmp_path: Path, line: str, expected: str
+) -> None:
+    source = _write(tmp_path / "evaluation.jsonl", line + "\n")
+
+    with pytest.raises(DatasetValidationError, match=expected):
+        EvaluationDataset.from_jsonl(source)
