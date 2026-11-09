@@ -207,13 +207,20 @@ def test_generation_output_validates_latency() -> None:
 
 
 @pytest.mark.parametrize(
-    ("query_id", "query"),
-    [("", "query"), ("q-1", "  "), (123, "query")],
+    ("query_id", "query", "field"),
+    [
+        ("", "query", "query_id"),
+        ("q-1", "  ", "query"),
+        (123, "query", "query_id"),
+        ("q-1", 123, "query"),
+    ],
 )
-def test_generation_request_rejects_empty_identity_fields(
-    query_id: object, query: object
+def test_generation_request_rejects_empty_query_fields(
+    query_id: object, query: object, field: str
 ) -> None:
-    with pytest.raises(EvaluationError, match="must be non-empty"):
+    with pytest.raises(
+        EvaluationError, match=rf"GenerationRequest\.{field} must be non-empty"
+    ):
         GenerationRequest(query_id, query)  # type: ignore[arg-type]
 
 
@@ -259,14 +266,16 @@ def test_generation_output_rejects_non_answer_values() -> None:
         GenerationOutput("mock", "answer", 0.0)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("latency_ms", [True, "1"])
-def test_generation_output_rejects_non_numeric_latency(latency_ms: object) -> None:
+@pytest.mark.parametrize("latency_ms", [True, "1", math.inf, math.nan])
+def test_generation_output_rejects_non_numeric_or_non_finite_latency(
+    latency_ms: object,
+) -> None:
     with pytest.raises(EvaluationError, match="latency_ms must be finite"):
         GenerationOutput("mock", GeneratedAnswer("answer"), latency_ms)  # type: ignore[arg-type]
 
 
 def test_callable_generator_validates_name_and_callback() -> None:
-    def callback(request: GenerationRequest) -> GeneratedAnswer:
+    def callback(_request: GenerationRequest) -> GeneratedAnswer:
         return GeneratedAnswer("answer")
 
     with pytest.raises(EvaluationError, match="name must be a non-empty string"):
@@ -290,10 +299,17 @@ def test_mock_generator_rejects_non_request_values() -> None:
 
 
 def test_generate_answer_rejects_non_request_values() -> None:
-    generator = MockGenerator(GeneratedAnswer("answer"))
+    seen: list[object] = []
+
+    def callback(request: GenerationRequest) -> GeneratedAnswer:
+        seen.append(request)
+        return GeneratedAnswer("answer")
+
+    generator = CallableGenerator("spy", callback)
 
     with pytest.raises(EvaluationError, match="request must be a GenerationRequest"):
         generate_answer(generator, "not-a-request")  # type: ignore[arg-type]
+    assert seen == []
 
 
 def test_generate_answer_rejects_non_callable_clock() -> None:
@@ -303,20 +319,29 @@ def test_generate_answer_rejects_non_callable_clock() -> None:
         generate_answer(generator, _request(), clock=123)  # type: ignore[arg-type]
 
 
-def test_generate_answer_rejects_a_generator_without_generate() -> None:
-    generator = SimpleNamespace(name="attribute-only")
+def test_generate_answer_rejects_generators_missing_attributes() -> None:
+    def callback(_request: GenerationRequest) -> GeneratedAnswer:
+        return GeneratedAnswer("answer")
 
-    with pytest.raises(EvaluationError, match="must provide non-empty name"):
-        generate_answer(generator, _request())  # type: ignore[arg-type]
+    for generator in (
+        SimpleNamespace(name="attribute-only"),
+        SimpleNamespace(generate=callback),
+    ):
+        with pytest.raises(
+            EvaluationError, match="must provide non-empty name"
+        ) as captured:
+            generate_answer(generator, _request())  # type: ignore[arg-type]
+        assert isinstance(captured.value.__cause__, AttributeError)
 
 
 @pytest.mark.parametrize(
     "generator",
     [
-        SimpleNamespace(name="  ", generate=lambda request: GeneratedAnswer("a")),
+        SimpleNamespace(name="  ", generate=lambda _request: GeneratedAnswer("a")),
         SimpleNamespace(name="gen", generate=123),
-        SimpleNamespace(name=123, generate=lambda request: GeneratedAnswer("a")),
+        SimpleNamespace(name=123, generate=lambda _request: GeneratedAnswer("a")),
     ],
+    ids=["blank-name", "non-callable-generate", "non-string-name"],
 )
 def test_generate_answer_rejects_invalid_generator_shapes(
     generator: SimpleNamespace,
