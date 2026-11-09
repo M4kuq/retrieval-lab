@@ -715,3 +715,153 @@ def test_public_comparison_input_validation() -> None:
         check_comparability(result, cast(EvaluationResult, object()))
     with pytest.raises(EvaluationError):
         compare_runs(result, result, tolerance=cast(ComparisonTolerance, object()))
+
+
+def test_comparability_issue_rejects_non_boolean_blocking() -> None:
+    with pytest.raises(EvaluationError, match="blocking must be boolean"):
+        ComparabilityIssue(field="x", reason="valid reason", blocking=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("delta", ["bad", True])
+def test_query_delta_extreme_rejects_non_numeric_delta(delta: object) -> None:
+    with pytest.raises(EvaluationError, match="must be a finite number"):
+        QueryDeltaExtreme("q", delta, 0.0)  # type: ignore[arg-type]
+
+
+def test_report_alias_properties_expose_issues() -> None:
+    issue = ComparabilityIssue("field", "reason")
+    report = ComparabilityReport(issues=(issue,))
+
+    assert report.blocking_issues == (issue,)
+    assert report.reasons == (issue,)
+    assert not report.is_comparable
+    assert ComparabilityReport().is_comparable
+
+
+def test_run_comparison_retrievers_alias_matches_metrics() -> None:
+    comparison = compare_runs(
+        _result({"bm25": (0.2, 0.4, 0.6)}),
+        _result({"bm25": (0.4, 0.4, 0.2)}),
+    )
+
+    assert comparison.retrievers == comparison.metrics
+
+
+def test_strict_field_missing_from_baseline_is_blocking() -> None:
+    baseline_base = _result({"bm25": (0.2, 0.4, 0.6)})
+    baseline_manifest = dict(baseline_base.manifest)
+    baseline_manifest.pop("dataset_hash")
+    baseline = EvaluationResult(
+        run_id=baseline_base.run_id,
+        metrics=baseline_base.metrics,
+        query_results=baseline_base.query_results,
+        manifest=baseline_manifest,
+    )
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)})
+
+    report = check_comparability(baseline, candidate)
+
+    assert any(
+        issue.field == "manifest.dataset_hash"
+        and issue.reason == "missing from baseline"
+        for issue in report.issues
+    )
+
+
+@pytest.mark.parametrize(
+    "query_ids",
+    [
+        ["q1", " ", "q3"],
+        ["q1", "q1", "q2"],
+    ],
+)
+def test_malformed_query_ids_are_missing_or_invalid(
+    query_ids: list[str],
+) -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"query_ids": query_ids})
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"query_ids": query_ids})
+
+    report = check_comparability(baseline, candidate)
+
+    assert not report.comparable
+    assert any(
+        issue.field == "manifest.query_ids"
+        and issue.reason == "missing or invalid in baseline"
+        for issue in report.issues
+    )
+    assert any(
+        issue.field == "manifest.query_ids"
+        and issue.reason == "missing or invalid in candidate"
+        for issue in report.issues
+    )
+
+
+@pytest.mark.parametrize("top_k", [3, [1, 0], [1, True], [1, 1]])
+def test_malformed_top_k_is_invalid_in_baseline(top_k: object) -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"top_k": top_k})
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"top_k": top_k})
+
+    report = check_comparability(baseline, candidate)
+
+    assert any(
+        issue.field == "manifest.top_k" and issue.reason == "invalid in baseline"
+        for issue in report.issues
+    )
+
+
+def test_invalid_candidate_top_k_is_blocking() -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)})
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"top_k": []})
+
+    report = check_comparability(baseline, candidate)
+
+    assert any(
+        issue.field == "manifest.top_k" and issue.reason == "invalid in candidate"
+        for issue in report.issues
+    )
+
+
+def test_top_k_values_differ_when_each_side_matches_its_own_cutoffs() -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)})
+    queries = tuple(
+        QueryEvaluation(
+            query_id=query_id,
+            retrieved_ids=(),
+            metrics_by_cutoff={1: {"recall": 0.4}},
+        )
+        for query_id in ("q1", "q2", "q3")
+    )
+    candidate = EvaluationResult(
+        run_id="run-id",
+        metrics={"bm25": RetrieverMetrics({1: {"recall": 0.4}})},
+        query_results={"bm25": queries},
+        manifest={
+            "dataset_hash": "dataset-hash",
+            "query_ids": ["q1", "q2", "q3"],
+            "relevance_level": "document",
+            "metric_version": 1,
+            "top_k": [1],
+        },
+    )
+
+    report = check_comparability(baseline, candidate)
+
+    assert any(
+        issue.field == "manifest.top_k" and issue.reason == "values differ"
+        for issue in report.issues
+    )
+
+
+def test_latency_missing_from_baseline_is_diagnostic() -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)})
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)}, latency=True)
+
+    report = check_comparability(baseline, candidate)
+
+    assert report.comparable
+    assert any(
+        item.field == "latency"
+        and item.reason == "latency is missing from baseline"
+        and not item.blocking
+        for item in report.diagnostics
+    )
