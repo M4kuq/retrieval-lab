@@ -8,6 +8,7 @@ include docs/demo.md
 include docs/answer-evaluation.md
 include docs/faq.md
 include docs/api-minimum.md
+include docs/api-reference.md
 include docs/evaluation-spec.md
 include docs/glossary.md
 include docs/ci-regression.md

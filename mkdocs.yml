@@ -18,6 +18,7 @@ nav:
   - FAQ: faq.md
   - CI regression gates: ci-regression.md
   - API minimum: api-minimum.md
+  - API reference: api-reference.md
   - Evaluation: evaluation-spec.md
   - Glossary: glossary.md
   - Benchmark: benchmark.md

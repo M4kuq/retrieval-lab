@@ -46,6 +46,7 @@ def test_release_metadata_and_manifest_are_explicit() -> None:
             "answer-evaluation.md",
             "faq.md",
             "api-minimum.md",
+            "api-reference.md",
             "evaluation-spec.md",
             "glossary.md",
             "ci-regression.md",
@@ -87,6 +88,7 @@ def test_mkdocs_nav_is_user_facing_only() -> None:
         "faq.md",
         "ci-regression.md",
         "api-minimum.md",
+        "api-reference.md",
         "evaluation-spec.md",
         "glossary.md",
         "benchmark.md",
@@ -123,6 +125,7 @@ def test_mkdocs_build_excludes_protected_documents(tmp_path: Path) -> None:
     assert (site_dir / "benchmark" / "index.html").is_file()
     assert (site_dir / "demo" / "index.html").is_file()
     assert (site_dir / "answer-evaluation" / "index.html").is_file()
+    assert (site_dir / "api-reference" / "index.html").is_file()
     generated = tuple(
         path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*")
     )

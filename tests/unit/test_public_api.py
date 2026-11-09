@@ -41,6 +41,20 @@ from retrieval_lab.models import Document as DocumentAlias
 
 ROOT = Path(__file__).resolve().parents[2]
 API_DOCUMENT = ROOT / "docs" / "api-minimum.md"
+API_REFERENCE = ROOT / "docs" / "api-reference.md"
+
+
+def _bullet_names(text: str) -> set[str]:
+    names: set[str] = set()
+    in_bullet = False
+    for line in text.splitlines():
+        if line.startswith("- "):
+            in_bullet = True
+        elif line and not line[0].isspace():
+            in_bullet = False
+        if in_bullet:
+            names.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
+    return names
 
 
 def test_package_root_and_compatibility_modules_share_public_types() -> None:
@@ -116,16 +130,14 @@ def test_public_imports_document_lists_exactly_the_exports() -> None:
     text = API_DOCUMENT.read_text(encoding="utf-8")
     start = text.index("## Public imports")
     end = text.index("## ", start + len("## Public imports"))
-    documented: set[str] = set()
-    in_bullet = False
-    for line in text[start:end].splitlines():
-        if line.startswith("- "):
-            in_bullet = True
-        elif line and not line[0].isspace():
-            in_bullet = False
-        if in_bullet:
-            documented.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
-    assert documented == set(retrieval_lab.__all__)
+    assert _bullet_names(text[start:end]) == set(retrieval_lab.__all__)
+
+
+def test_api_reference_lists_exactly_the_public_surface() -> None:
+    import retrieval_lab.metrics as metrics
+
+    documented = _bullet_names(API_REFERENCE.read_text(encoding="utf-8"))
+    assert documented == set(retrieval_lab.__all__) | set(metrics.__all__)
 
 
 def test_distribution_is_typed() -> None:
