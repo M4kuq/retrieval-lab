@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -432,3 +433,322 @@ def test_result_rejects_non_json_manifest() -> None:
             query_results={"keyword": [_query_evaluation()]},
             manifest={"bad": object()},  # type: ignore[dict-item]
         )
+
+
+def _parsed_payload() -> dict[str, object]:
+    payload = json.loads(_result().to_json())
+    second = dict(payload["retrievers"]["keyword"]["per_query"][0])
+    second["query_id"] = "q-2"
+    second["metrics"] = {
+        "hit_rate@1": 1.0,
+        "hit_rate@2": 1.0,
+        "recall@1": 1.0,
+        "recall@2": 1.0,
+    }
+    payload["retrievers"]["keyword"]["per_query"].append(second)
+    return payload
+
+
+_GATE: dict[str, object] = {
+    "baseline_run_id": None,
+    "candidate_run_id": "run-日本語",
+    "checks": [
+        {
+            "absolute_tolerance": 1e-12,
+            "actual": 0.5,
+            "baseline_run_id": None,
+            "candidate_run_id": "run-日本語",
+            "constraint": "min_value",
+            "metric": "recall@1",
+            "passed": True,
+            "reason": "candidate meets minimum",
+            "relative_tolerance": 1e-09,
+            "retriever": "keyword",
+            "status": "defined",
+            "threshold": 0.4,
+        }
+    ],
+    "gate_index": 0,
+    "metric": "recall@1",
+    "passed": True,
+    "retriever": "keyword",
+}
+
+_LATENCY: dict[str, object] = {
+    "mean_ms": 1.0,
+    "p50_ms": 1.0,
+    "p95_ms": 1.0,
+    "max_ms": 1.0,
+    "sample_count": 2,
+    "failure_count": 0,
+    "warnings": [],
+}
+
+
+def _gated_payload() -> dict[str, object]:
+    payload = _parsed_payload()
+    payload["quality_gates"] = [json.loads(json.dumps(_GATE))]
+    return payload
+
+
+def _latency_payload() -> dict[str, object]:
+    payload = _parsed_payload()
+    payload["retrievers"]["keyword"]["latency"] = dict(_LATENCY)  # type: ignore[index]
+    return payload
+
+
+def test_result_from_dict_accepts_canonical_payload_shapes() -> None:
+    plain = results_module.result_from_dict(_parsed_payload())
+    assert plain.run_id == "run-日本語"
+
+    gated = results_module.result_from_dict(_gated_payload())
+    assert gated.quality_gates[0].checks[0].actual == 0.5
+
+    with_latency = results_module.result_from_dict(_latency_payload())
+    assert with_latency.latency is not None
+    assert with_latency.latency["keyword"].sample_count == 2
+
+
+def _keyword(payload: dict[str, object]) -> dict[str, object]:
+    return payload["retrievers"]["keyword"]  # type: ignore[index,return-value]
+
+
+def _first_query(payload: dict[str, object]) -> dict[str, object]:
+    return _keyword(payload)["per_query"][0]  # type: ignore[index,return-value]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda payload: payload.__setitem__("retrievers", {}),
+            r"result\.retrievers must not be empty",
+        ),
+        (
+            lambda payload: payload.__setitem__("retrievers", []),
+            r"result\.retrievers must be an object",
+        ),
+        (
+            lambda payload: payload["run"].__setitem__("manifest", {1: "x"}),  # type: ignore[attr-defined]
+            r"result\.run\.manifest keys must be strings",
+        ),
+        (
+            lambda payload: payload["run"].__setitem__("id", "  "),  # type: ignore[attr-defined]
+            r"result\.run\.id must be a non-empty string",
+        ),
+        (
+            lambda payload: _keyword(payload).__setitem__("metrics", {}),
+            "metrics must not be empty",
+        ),
+        (
+            lambda payload: _keyword(payload)["metrics"].__setitem__(  # type: ignore[index]
+                "recall@1", "high"
+            ),
+            "must be a finite number",
+        ),
+        (
+            lambda payload: _keyword(payload)["metrics"].__setitem__(  # type: ignore[index]
+                "recall@1", 10**400
+            ),
+            "must be a finite number",
+        ),
+        (
+            lambda payload: _keyword(payload)["metrics"].__setitem__(  # type: ignore[index]
+                "recall@1", float("inf")
+            ),
+            "must be a finite number",
+        ),
+        (
+            lambda payload: _first_query(payload).__setitem__("retrieved_ids", "doc-2"),
+            "retrieved_ids must be a list of strings",
+        ),
+        (
+            lambda payload: _first_query(payload).__setitem__("warnings", "oops"),
+            "warnings must be a list of strings",
+        ),
+        (
+            lambda payload: _first_query(payload).__setitem__(
+                "search_latency_ms", "fast"
+            ),
+            "search_latency_ms must be a finite number",
+        ),
+        (
+            lambda payload: _first_query(payload).__setitem__(
+                "retrieved_ids_by_cutoff", {"x": ["doc-2"]}
+            ),
+            "keys must be canonical positive integers",
+        ),
+        (
+            lambda payload: _first_query(payload).__setitem__(
+                "retrieved_ids_by_cutoff", {"01": ["doc-2"]}
+            ),
+            "keys must be canonical positive integers",
+        ),
+        (
+            lambda payload: _first_query(payload).__setitem__(
+                "retrieved_ids_by_cutoff", {"1": "doc-2"}
+            ),
+            r"retrieved_ids_by_cutoff\[1\] must be a list",
+        ),
+        (
+            lambda payload: _first_query(payload).__setitem__(
+                "metrics", {"recall@1": 0.0}
+            ),
+            "metrics shape differs",
+        ),
+        (
+            lambda payload: _keyword(payload)["metrics"].__setitem__(  # type: ignore[index]
+                "recall@2", 0.5
+            ),
+            "does not match per-query aggregate",
+        ),
+    ],
+)
+def test_result_from_dict_rejects_invalid_payloads(
+    mutate: Callable[[dict[str, object]], None], expected: str
+) -> None:
+    payload = _parsed_payload()
+    mutate(payload)
+
+    with pytest.raises(EvaluationError, match=expected):
+        results_module.result_from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("sample_count", -1, "must be a non-negative integer"),
+        ("warnings", "oops", "warnings must be a list of strings"),
+        ("mean_ms", "fast", "must be a finite number"),
+    ],
+)
+def test_result_from_dict_rejects_invalid_latency(
+    field: str, value: object, expected: str
+) -> None:
+    payload = _latency_payload()
+    _keyword(payload)["latency"][field] = value  # type: ignore[index]
+
+    with pytest.raises(EvaluationError, match=expected):
+        results_module.result_from_dict(payload)
+
+
+def _gate(payload: dict[str, object]) -> dict[str, object]:
+    return payload["quality_gates"][0]  # type: ignore[index,return-value]
+
+
+def _gate_check(payload: dict[str, object]) -> dict[str, object]:
+    return _gate(payload)["checks"][0]  # type: ignore[index,return-value]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda payload: payload.__setitem__("quality_gates", {}),
+            r"result\.quality_gates must be a list",
+        ),
+        (
+            lambda payload: _gate(payload).__setitem__("checks", []),
+            "checks must be a non-empty list",
+        ),
+        (
+            lambda payload: _gate(payload).__setitem__("candidate_run_id", "other"),
+            "candidate_run_id does not match result run",
+        ),
+        (
+            lambda payload: _gate(payload).__setitem__("gate_index", -1),
+            "must be a non-negative integer",
+        ),
+        (
+            lambda payload: _gate_check(payload).__setitem__("passed", "yes"),
+            "must be boolean",
+        ),
+        (
+            lambda payload: _gate_check(payload).__setitem__("retriever", "bm25"),
+            "retriever does not match gate",
+        ),
+        (
+            lambda payload: _gate_check(payload).__setitem__("metric", "recall@2"),
+            "metric does not match gate",
+        ),
+        (
+            lambda payload: _gate_check(payload).__setitem__(
+                "candidate_run_id", "other"
+            ),
+            "candidate_run_id does not match gate",
+        ),
+        (
+            lambda payload: _gate_check(payload).__setitem__("baseline_run_id", "base"),
+            "baseline_run_id does not match gate",
+        ),
+    ],
+)
+def test_result_from_dict_rejects_invalid_quality_gates(
+    mutate: Callable[[dict[str, object]], None], expected: str
+) -> None:
+    payload = _gated_payload()
+    mutate(payload)
+
+    with pytest.raises(EvaluationError, match=expected):
+        results_module.result_from_dict(payload)
+
+
+def test_atomic_write_reports_unpreparable_output_path(tmp_path: Path) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(EvaluationError, match="could not prepare output path"):
+        results_module._atomic_write_text(blocker / "result.json", "{}")
+
+    with pytest.raises(EvaluationError, match="could not be saved"):
+        _result().save_json(blocker / "result.json")
+
+
+def _two_retriever_payload() -> dict[str, object]:
+    payload = _parsed_payload()
+    payload["retrievers"]["bm25"] = json.loads(  # type: ignore[index]
+        json.dumps(payload["retrievers"]["keyword"])  # type: ignore[index]
+    )
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda section: section.__setitem__("per_query", "q-1"),
+            "per_query must be a list",
+        ),
+        (
+            lambda section: section.__setitem__("per_query", []),
+            "per_query must not be empty",
+        ),
+        (
+            lambda section: section["per_query"].append(  # type: ignore[attr-defined]
+                section["per_query"][0]  # type: ignore[index]
+            ),
+            "query IDs must be unique",
+        ),
+        (
+            lambda section: section.__setitem__(
+                "per_query",
+                list(reversed(section["per_query"])),  # type: ignore[arg-type]
+            ),
+            "IDs/order differ",
+        ),
+        (
+            lambda section: section["metrics"].pop("recall@2"),  # type: ignore[attr-defined]
+            "metrics shape differs",
+        ),
+    ],
+)
+def test_result_from_dict_rejects_inconsistent_second_retriever(
+    mutate: Callable[[dict[str, object]], None], expected: str
+) -> None:
+    payload = _two_retriever_payload()
+    assert results_module.result_from_dict(_two_retriever_payload()).run_id
+
+    mutate(payload["retrievers"]["bm25"])  # type: ignore[index,arg-type]
+
+    with pytest.raises(EvaluationError, match=expected):
+        results_module.result_from_dict(payload)
