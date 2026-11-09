@@ -1,8 +1,18 @@
+import argparse
 import json
+import re
 from pathlib import Path
 
-from retrieval_lab import DatasetDraft, DraftQuery, load_dataset_draft
+import pytest
+
+from retrieval_lab import (
+    DatasetDraft,
+    DatasetValidationError,
+    DraftQuery,
+    load_dataset_draft,
+)
 from retrieval_lab.cli.app import main
+from retrieval_lab.cli.dataset import run_dataset_command
 
 
 def _bundle(tmp_path: Path) -> Path:
@@ -92,6 +102,139 @@ def test_dataset_finalize_cli_returns_input_error_for_pending_draft(
     bundle = _bundle(tmp_path)
 
     status = main(["dataset", "finalize", str(bundle)])
+
+    assert status == 2
+    assert "configuration or input error" in capsys.readouterr().err
+
+
+def test_dataset_status_cli_lists_pending_queries_in_text_output(
+    tmp_path: Path, capsys
+) -> None:
+    bundle = _bundle(tmp_path)
+
+    status = main(["dataset", "status", str(bundle)])
+
+    assert status == 0
+    output = capsys.readouterr().out
+    assert "queries: 0/1 complete" in output
+    assert "pending: q-1" in output
+
+
+def _review_args(bundle: Path, corpus: Path, relevant: object) -> argparse.Namespace:
+    return argparse.Namespace(
+        dataset_command="review",
+        bundle=bundle,
+        corpus=corpus,
+        query_id="q-1",
+        relevant=relevant,
+        complete_review=False,
+        notes=None,
+        json_output=False,
+    )
+
+
+def test_dataset_finalize_cli_succeeds_for_a_completed_draft(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    bundle = _bundle(tmp_path)
+    corpus = _corpus(tmp_path)
+    reviewed = main(
+        [
+            "dataset",
+            "review",
+            str(bundle),
+            "--corpus",
+            str(corpus),
+            "--query-id",
+            "q-1",
+            "--relevant",
+            "doc-1.md",
+            "--complete-review",
+        ]
+    )
+    assert reviewed == 0
+    capsys.readouterr()
+
+    status = main(["dataset", "finalize", str(bundle), "--json"])
+
+    assert status == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["pending_query_ids"] == []
+
+
+def test_dataset_command_rejects_unknown_commands() -> None:
+    args = argparse.Namespace(dataset_command="bogus")
+
+    with pytest.raises(DatasetValidationError, match="unknown dataset command"):
+        run_dataset_command(args)
+
+
+def test_dataset_review_prompt_rejects_unknown_query_ids(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    corpus = _corpus(tmp_path)
+    args = _review_args(bundle, corpus, None)
+    args.query_id = "missing"
+
+    with pytest.raises(DatasetValidationError, match="unknown draft query ID"):
+        run_dataset_command(args)
+
+
+def test_dataset_review_prompt_requires_at_least_one_document(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bundle = _bundle(tmp_path)
+    corpus = _corpus(tmp_path)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "  ")
+
+    with pytest.raises(
+        DatasetValidationError, match="at least one relevant document is required"
+    ):
+        run_dataset_command(_review_args(bundle, corpus, None))
+
+
+@pytest.mark.parametrize(
+    ("relevant", "message"),
+    [
+        ([" "], "--relevant values must be non-empty"),
+        ([":2"], "--relevant must use ID or ID:GRADE syntax"),
+        (["doc-1.md:"], "--relevant must use ID or ID:GRADE syntax"),
+        (["doc-1.md:abc"], "--relevant grade must be an integer"),
+        (["doc-1.md:0"], "--relevant grade must be >= 1"),
+        (["doc-1.md", "doc-1.md:2"], "duplicate --relevant document ID"),
+        ([], "at least one relevant document is required"),
+    ],
+)
+def test_dataset_review_rejects_invalid_relevance_specs(
+    tmp_path: Path, relevant: list[str], message: str
+) -> None:
+    bundle = _bundle(tmp_path)
+    corpus = _corpus(tmp_path)
+
+    with pytest.raises(DatasetValidationError, match=re.escape(message)):
+        run_dataset_command(_review_args(bundle, corpus, relevant))
+
+
+def test_dataset_review_cli_returns_input_error_for_invalid_grade(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    bundle = _bundle(tmp_path)
+    corpus = _corpus(tmp_path)
+
+    status = main(
+        [
+            "dataset",
+            "review",
+            str(bundle),
+            "--corpus",
+            str(corpus),
+            "--query-id",
+            "q-1",
+            "--relevant",
+            "doc-1.md:0",
+        ]
+    )
 
     assert status == 2
     assert "configuration or input error" in capsys.readouterr().err
