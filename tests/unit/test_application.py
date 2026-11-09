@@ -503,6 +503,16 @@ def _manifest(payload: dict[str, object]) -> dict[str, object]:
     return manifest
 
 
+def _first_gate(payload: dict[str, object]) -> dict[str, object]:
+    config = _manifest(payload)["config"]
+    assert isinstance(config, dict)
+    gates = config["quality_gates"]
+    assert isinstance(gates, list)
+    gate = gates[0]
+    assert isinstance(gate, dict)
+    return gate
+
+
 def test_initialize_rejects_missing_or_invalid_target_values() -> None:
     with pytest.raises(ConfigurationError, match="must be provided"):
         initialize_project(None)  # type: ignore[arg-type]
@@ -587,8 +597,10 @@ def test_run_requires_an_output_directory_for_selected_formats(
 ) -> None:
     project = initialize_project(tmp_path / "project")
     config_path = project.target / "retrieval-lab.yaml"
+    template = config_path.read_text(encoding="utf-8")
+    assert "  output_dir: reports\n" in template
     config_path.write_text(
-        config_path.read_text(encoding="utf-8").replace("  output_dir: reports\n", ""),
+        template.replace("  output_dir: reports\n", ""),
         encoding="utf-8",
     )
 
@@ -711,18 +723,17 @@ def test_embedded_gates_reject_malformed_entries(tmp_path: Path) -> None:
     assert isinstance(config, dict)
     config["quality_gates"] = [{"retriever": "bm25"}]
 
-    with pytest.raises(ConfigurationError, match=r"quality_gates\[0\] is invalid"):
+    with pytest.raises(
+        ConfigurationError, match=r"quality_gates\[0\] is invalid"
+    ) as exc_info:
         evaluate_configured_quality_gates(_rewrite_result(output, payload))
+    assert exc_info.value.__cause__ is None
 
 
 def test_embedded_gates_reject_non_string_fields(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
     payload = _load_payload(output)
-    config = _manifest(payload)["config"]
-    assert isinstance(config, dict)
-    gates = config["quality_gates"]
-    assert isinstance(gates, list)
-    gates[0]["retriever"] = 123
+    _first_gate(payload)["retriever"] = 123
 
     with pytest.raises(
         ConfigurationError, match=r"quality_gates\[0\] is invalid"
@@ -736,11 +747,7 @@ def test_embedded_gates_reject_non_string_fields(tmp_path: Path) -> None:
 def test_embedded_gates_reject_non_numeric_thresholds(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
     payload = _load_payload(output)
-    config = _manifest(payload)["config"]
-    assert isinstance(config, dict)
-    gates = config["quality_gates"]
-    assert isinstance(gates, list)
-    gates[0]["min_value"] = True
+    _first_gate(payload)["min_value"] = True
 
     with pytest.raises(
         ConfigurationError, match=r"quality_gates\[0\] is invalid"
@@ -754,11 +761,7 @@ def test_embedded_gates_reject_thresholds_that_overflow_floats(
 ) -> None:
     output = _gated_output(tmp_path)
     payload = _load_payload(output)
-    config = _manifest(payload)["config"]
-    assert isinstance(config, dict)
-    gates = config["quality_gates"]
-    assert isinstance(gates, list)
-    gates[0]["min_value"] = 10**400
+    _first_gate(payload)["min_value"] = 10**400
 
     with pytest.raises(
         ConfigurationError, match=r"quality_gates\[0\] is invalid"
