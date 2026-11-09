@@ -185,6 +185,9 @@ class EvaluationCheckpoint:
             ) from error
 
     def _missing_trailing_newline(self) -> bool:
+        # A missing file needs no separator; any other read failure
+        # propagates so the caller's rollback path handles it instead
+        # of appending onto a line whose end was never verified.
         try:
             with self._path.open("rb") as handle:
                 handle.seek(0, os.SEEK_END)
@@ -192,7 +195,7 @@ class EvaluationCheckpoint:
                     return False
                 handle.seek(-1, os.SEEK_END)
                 return handle.read(1) != b"\n"
-        except OSError:
+        except FileNotFoundError:
             return False
 
     def _load(self) -> None:
