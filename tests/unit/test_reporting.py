@@ -16,6 +16,7 @@ from retrieval_lab import (
 )
 from retrieval_lab.exceptions import EvaluationError
 from retrieval_lab.reporting._safety import safe_identifier
+from retrieval_lab.reporting.html import _config_view
 
 
 def _query(query_id: str, value: float, *, timed: bool = True) -> QueryEvaluation:
@@ -355,6 +356,114 @@ def test_html_recommendations_use_recall_cutoffs_and_ignore_empty_latency() -> N
     assert "Recall@5" not in rendered
     assert "<strong>Latency:</strong> Data unavailable" in rendered
     assert "<strong>Balanced:</strong> Data unavailable" in rendered
+
+
+def test_config_view_skips_malformed_sections_and_entries() -> None:
+    manifest = {
+        "config": {
+            "experiment": {"seed": "42"},
+            "corpus": {"chunker": {"unknown": 1}},
+            "dataset": {"relevance_level": 3},
+            "retrievers": [
+                "keyword",
+                {"model": "not-a-displayed-key"},
+                {"name": "bm25", "type": "bm25", "k1": 1.5},
+            ],
+            "evaluation": {"unknown": 1},
+        }
+    }
+
+    assert _config_view(manifest) == {
+        "retrievers": [{"name": "bm25", "type": "bm25", "k1": 1.5}]
+    }
+    assert _config_view({"config": {"retrievers": [{"model": "x"}]}}) == {}
+    assert _config_view({"config": {"corpus": {"chunker": "not-a-mapping"}}}) == {}
+    assert _config_view({"config": {"retrievers": {"name": "bm25"}}}) == {}
+
+
+def test_html_recommendations_skip_retrievers_missing_the_recall_cutoff() -> None:
+    def query(metrics: dict[int, dict[str, float]]) -> QueryEvaluation:
+        return QueryEvaluation(
+            query_id="q",
+            retrieved_ids=("doc",),
+            metrics_by_cutoff=metrics,
+        )
+
+    result = EvaluationResult(
+        run_id="run",
+        metrics={
+            "wide": RetrieverMetrics({3: {"recall": 0.5}}),
+            "narrow": RetrieverMetrics({1: {"recall": 0.9}}),
+        },
+        query_results={
+            "wide": (query({3: {"recall": 0.5}}),),
+            "narrow": (query({1: {"recall": 0.9}}),),
+        },
+    )
+
+    rendered = result.to_html()
+
+    assert "<strong>Quality:</strong> wide (Recall@3)" in rendered
+
+
+def test_html_recommendations_report_unavailable_balanced_pick() -> None:
+    def query(metrics: dict[int, dict[str, float]]) -> QueryEvaluation:
+        return QueryEvaluation(
+            query_id="q",
+            retrieved_ids=("doc",),
+            metrics_by_cutoff=metrics,
+        )
+
+    result = EvaluationResult(
+        run_id="run",
+        metrics={
+            "quality-only": RetrieverMetrics({1: {"recall": 0.5}}),
+            "latency-only": RetrieverMetrics({1: {"precision": 0.5}}),
+        },
+        query_results={
+            "quality-only": (query({1: {"recall": 0.5}}),),
+            "latency-only": (query({1: {"precision": 0.5}}),),
+        },
+        latency={
+            "quality-only": LatencyStats(
+                mean_ms=0.0,
+                p50_ms=0.0,
+                p95_ms=0.0,
+                max_ms=0.0,
+                sample_count=0,
+            ),
+            "latency-only": LatencyStats(
+                mean_ms=5.0,
+                p50_ms=5.0,
+                p95_ms=5.0,
+                max_ms=5.0,
+                sample_count=3,
+            ),
+        },
+    )
+
+    rendered = result.to_html()
+
+    assert "<strong>Quality:</strong> quality-only (Recall@1)" in rendered
+    assert "<strong>Latency:</strong> latency-only (p95)" in rendered
+    assert "<strong>Balanced:</strong> Data unavailable" in rendered
+
+
+def test_html_recommendations_report_unavailable_quality_without_recall() -> None:
+    query = QueryEvaluation(
+        query_id="q",
+        retrieved_ids=("doc",),
+        metrics_by_cutoff={1: {"precision": 0.5}},
+    )
+    result = EvaluationResult(
+        run_id="run",
+        metrics={"bm25": RetrieverMetrics({1: {"precision": 0.5}})},
+        query_results={"bm25": (query,)},
+    )
+
+    rendered = result.to_html()
+
+    assert "<strong>Quality:</strong> Data unavailable" in rendered
 
 
 def test_save_csv_rejects_invalid_output_path() -> None:
