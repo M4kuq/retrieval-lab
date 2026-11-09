@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from types import ModuleType
+
+import retrieval_lab
 from retrieval_lab import (
     BM25Retriever,
     ComparisonOutput,
@@ -31,6 +38,9 @@ from retrieval_lab import (
 )
 from retrieval_lab.errors import RetrievalLabError as ErrorAlias
 from retrieval_lab.models import Document as DocumentAlias
+
+ROOT = Path(__file__).resolve().parents[2]
+API_DOCUMENT = ROOT / "docs" / "api-minimum.md"
 
 
 def test_package_root_and_compatibility_modules_share_public_types() -> None:
@@ -81,3 +91,43 @@ def test_application_services_are_available_from_the_package_root() -> None:
     assert inspect_result.__module__ == "retrieval_lab.application"
     assert compare_result_files.__module__ == "retrieval_lab.application"
     assert evaluate_configured_quality_gates.__module__ == "retrieval_lab.application"
+
+
+def test_public_all_is_sorted_and_duplicate_free() -> None:
+    names = list(retrieval_lab.__all__)
+    assert names == sorted(names)
+    assert len(names) == len(set(names))
+
+
+def test_every_export_is_importable_from_the_package_root() -> None:
+    for name in retrieval_lab.__all__:
+        assert hasattr(retrieval_lab, name), name
+
+
+def test_package_root_exposes_no_undocumented_names() -> None:
+    exposed = {name for name in dir(retrieval_lab) if not name.startswith("_")}
+    submodules = {
+        name for name in exposed if isinstance(getattr(retrieval_lab, name), ModuleType)
+    }
+    assert exposed - submodules == set(retrieval_lab.__all__)
+
+
+def test_public_imports_document_lists_exactly_the_exports() -> None:
+    text = API_DOCUMENT.read_text(encoding="utf-8")
+    start = text.index("## Public imports")
+    end = text.index("## ", start + len("## Public imports"))
+    documented: set[str] = set()
+    in_bullet = False
+    for line in text[start:end].splitlines():
+        if line.startswith("- "):
+            in_bullet = True
+        elif line and not line[0].isspace():
+            in_bullet = False
+        if in_bullet:
+            documented.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
+    assert documented == set(retrieval_lab.__all__)
+
+
+def test_distribution_is_typed() -> None:
+    package_dir = Path(retrieval_lab.__file__).parent
+    assert (package_dir / "py.typed").is_file()

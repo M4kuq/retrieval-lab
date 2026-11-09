@@ -1,54 +1,118 @@
 # Minimum public API for the first vertical slice
 
 Status: accepted and extended through the data-input, precomputed-evaluation, and
-BM25 milestone.
+BM25 milestone. As of the PyPI release track (RET-10), the public-imports list
+below is the complete stable public API: it enumerates exactly the names in
+`retrieval_lab.__all__`, and a packaging test pins the two together so the
+documented surface and the exported surface cannot drift apart.
 
 This document fixes the smallest useful public API before implementation. The
 interface can grow during v0.1, but existing behavior must not be moved behind a
-private module without a deprecation path.
+private module without a deprecation path. Modules and names not listed here
+(including every underscore-prefixed helper) are internal implementation and
+may change without notice. The distribution is typed: the wheel ships
+`retrieval_lab/py.typed` (PEP 561).
 
 ## Public imports
 
 The following names are importable from `retrieval_lab`:
 
-- `Document`
-- `Chunk`
-- `EvaluationQuery`
-- `SearchResult`
-- `QueryEvaluation`
-- `RetrieverMetrics`
-- `EvaluationResult`
-- `BaseRetriever`
-- `KeywordRetriever`
-- `BM25Retriever`
-- `DenseRetriever`
-- `HybridRetriever`
+Domain records:
+
+- `Document`, `Chunk`, `EvaluationQuery`, `SearchResult`
+- `QueryEvaluation`, `RetrieverMetrics`, `EvaluationResult`, `LatencyStats`
+- `ConstraintType`
+
+Retrievers and chunking:
+
+- `BaseRetriever`, `KeywordRetriever`, `BM25Retriever`, `DenseRetriever`,
+  `HybridRetriever`
+- `EmbeddingBackend`, `EmbeddingModelMetadata`
+- `FixedSizeChunker`
+
+Callable retriever adapters:
+
 - `RetrievedItem`, `Retriever`, `CallableRetriever`, `evaluate_retrievers`
 - `AsyncRetriever`, `AsyncCallableRetriever`, `evaluate_async_retrievers`
-- `EmbeddingBackend`
-- `EmbeddingModelMetadata`
-- `OptionalDependencyError`
-- `FixedSizeChunker`
-- `EvaluationDataset`
-- `RelevanceLevel`
-- `RetrievedQueryResult`
-- `EvaluationRunner`
-- `RetrievalConfig` and its typed nested configuration records
+
+Datasets:
+
+- `EvaluationDataset`, `RelevanceLevel`, `validate_dataset`
+- `RetrievedQueryResult`, `evaluate_results`
+- `load_documents`
+
+Configuration:
+
+- `RetrievalConfig`, `ExperimentConfig`, `CorpusConfig`, `DatasetConfig`,
+  `EvaluationConfig`, `ReportConfig`
+- `ChunkerConfig`, `BM25RetrieverConfig`, `KeywordRetrieverConfig`,
+  `DenseRetrieverConfig`, `HybridRetrieverConfig`
 - `load_config`
+
+Runner and result loading:
+
+- `EvaluationRunner`
 - `load_result`
+
+Comparison:
+
 - `ComparisonTolerance`, `ComparabilityIssue`, `ComparabilityReport`
-- `MetricDelta`, `QueryDeltaExtreme`, `MetricComparison`, `RunComparison`
+- `MetricDelta`, `MetricComparison`, `QueryDeltaExtreme`, `RunComparison`
 - `check_comparability`, `compare_runs`
-- `QualityGateConfig`, `QualityGateCheck`, `QualityGateResult`, `QualityGateReport`
+
+Quality gates:
+
+- `QualityGateConfig`, `QualityGateCheck`, `QualityGateResult`,
+  `QualityGateReport`
 - `evaluate_quality_gates`
+
+Application services:
+
 - `InitializedProject`, `ValidationResult`, `ExperimentOutput`
 - `initialize_project`, `validate_config_inputs`, `run_configured_experiment`
 - `InspectionOutput`, `QueryEvidence`, `ComparisonOutput`, `ComparisonRow`,
   `GateOutput`
 - `inspect_result`, `compare_result_files`, `evaluate_configured_quality_gates`
-- `load_documents`
-- `validate_dataset`
-- `evaluate_results`
+
+Answer evaluation:
+
+- `AnswerEvaluation`, `AnswerEvaluationResult`, `AnswerFailureType`,
+  `AnswerReference`
+- `evaluate_answer`, `evaluate_answers`, `exact_match`, `token_f1`
+
+Answer generation:
+
+- `Generator`, `GenerateCallable`, `CallableGenerator`, `MockGenerator`
+- `GenerationRequest`, `GenerationContext`, `GeneratedAnswer`, `GenerationOutput`
+- `generate_answer`
+
+Dataset authoring, inspection, and workflow:
+
+- `DatasetDraft`, `DraftQuery`, `DatasetOrigin`, `DatasetProvenance`,
+  `DatasetReviewStatus`
+- `DatasetInspectionCode`, `DatasetInspectionIssue`, `DatasetInspectionReport`,
+  `inspect_dataset`
+- `DatasetDraftStatus`, `dataset_draft_status`, `load_dataset_draft`,
+  `review_dataset_query`, `finalize_dataset_bundle`
+
+Synthetic query drafts:
+
+- `SyntheticQueryGenerator`, `SyntheticGenerateCallable`,
+  `CallableSyntheticGenerator`
+- `generate_synthetic_draft`, `mark_draft_in_review`, `mark_draft_reviewed`
+
+Demo comparison:
+
+- `DemoComparison`, `DemoRetrieverView`, `DemoSearchHit`
+- `compare_retrievers_for_query`, `retrieval_metric_explanations`
+
+Exceptions (also importable from `retrieval_lab.exceptions`;
+`retrieval_lab.errors` is a compatibility alias module):
+
+- `RetrievalLabError`
+- `ConfigurationError`, `CorpusValidationError`, `DatasetValidationError`
+- `EvaluationError`, `IncomparableRunError`, `OptionalDependencyError`,
+  `RetrieverContractError`
 
 Metric functions are importable from `retrieval_lab.metrics` and may also be
 re-exported later when the metric surface is stable.
