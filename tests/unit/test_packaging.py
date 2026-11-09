@@ -179,6 +179,33 @@ def test_release_candidate_workflow_is_manual_and_read_only() -> None:
         assert forbidden not in serialized
 
 
+def test_release_workflow_is_tag_driven_and_uses_trusted_publishing() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    )
+    assert isinstance(workflow, dict)
+    trigger = workflow.get("on", workflow.get(True))
+    assert trigger == {"push": {"tags": ["v*"]}}
+    assert workflow["permissions"] == {"contents": "read"}
+
+    build = workflow["jobs"]["build"]
+    build_steps = json.dumps(build["steps"], ensure_ascii=False)
+    assert "GITHUB_REF_NAME" in build_steps
+    assert "test_packaging.py" in build_steps
+    assert "python -m build" in build_steps
+
+    publish = workflow["jobs"]["publish"]
+    assert publish["needs"] == "build"
+    assert publish["permissions"] == {"id-token": "write"}
+    assert publish["environment"]["name"] == "pypi"
+    publish_steps = json.dumps(publish["steps"], ensure_ascii=False)
+    assert "pypa/gh-action-pypi-publish" in publish_steps
+
+    serialized = json.dumps(workflow, ensure_ascii=False).lower()
+    for forbidden in ("password", "api_token", "secrets.", "twine"):
+        assert forbidden not in serialized
+
+
 def test_clean_build_artifacts_have_expected_content_and_metadata(
     tmp_path: Path,
 ) -> None:
