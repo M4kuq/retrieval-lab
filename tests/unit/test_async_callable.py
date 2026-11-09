@@ -987,7 +987,6 @@ def test_async_unexpected_worker_errors_become_contract_errors(
 
 def test_async_external_cancellation_cancels_workers_stuck_in_cleanup() -> None:
     started = {"first": asyncio.Event(), "second": asyncio.Event()}
-    cleanup_started = asyncio.Event()
     gate = asyncio.Event()
     gate_interrupted = asyncio.Event()
 
@@ -997,12 +996,10 @@ def test_async_external_cancellation_cancels_workers_stuck_in_cleanup() -> None:
         async def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
             started[query].set()
             if query == "first":
-                await cleanup_started.wait()
-                raise asyncio.CancelledError
+                await asyncio.Event().wait()
             try:
                 await asyncio.Event().wait()
             finally:
-                cleanup_started.set()
                 try:
                     await gate.wait()
                 except asyncio.CancelledError:
@@ -1052,9 +1049,10 @@ def test_first_task_error_falls_back_to_the_first_leaf() -> None:
     plain = BaseExceptionGroup("plain", [generic, KeyError("second")])
     assert async_callable_module._first_task_error(plain) is generic
 
+    nested_generic = ValueError("nested-first")
     nested = BaseExceptionGroup(
         "outer",
-        [BaseExceptionGroup("inner", [generic]), KeyError("second")],
+        [BaseExceptionGroup("inner", [nested_generic]), KeyError("second")],
     )
-    assert async_callable_module._first_task_error(nested) is generic
+    assert async_callable_module._first_task_error(nested) is nested_generic
     assert async_callable_module._first_task_error(generic) is generic
