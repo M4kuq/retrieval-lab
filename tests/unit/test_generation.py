@@ -215,7 +215,7 @@ def test_generation_output_validates_latency() -> None:
         ("q-1", 123, "query"),
     ],
 )
-def test_generation_request_rejects_empty_query_fields(
+def test_generation_request_rejects_empty_or_non_string_query_fields(
     query_id: object, query: object, field: str
 ) -> None:
     with pytest.raises(
@@ -319,19 +319,22 @@ def test_generate_answer_rejects_non_callable_clock() -> None:
         generate_answer(generator, _request(), clock=123)  # type: ignore[arg-type]
 
 
-def test_generate_answer_rejects_generators_missing_attributes() -> None:
-    def callback(_request: GenerationRequest) -> GeneratedAnswer:
-        return GeneratedAnswer("answer")
-
-    for generator in (
+@pytest.mark.parametrize(
+    "generator",
+    [
         SimpleNamespace(name="attribute-only"),
-        SimpleNamespace(generate=callback),
-    ):
-        with pytest.raises(
-            EvaluationError, match="must provide non-empty name"
-        ) as captured:
-            generate_answer(generator, _request())  # type: ignore[arg-type]
-        assert isinstance(captured.value.__cause__, AttributeError)
+        SimpleNamespace(generate=lambda _request: GeneratedAnswer("answer")),
+    ],
+    ids=["missing-generate", "missing-name"],
+)
+def test_generate_answer_rejects_generators_missing_attributes(
+    generator: SimpleNamespace,
+) -> None:
+    with pytest.raises(
+        EvaluationError, match="must provide non-empty name"
+    ) as captured:
+        generate_answer(generator, _request())  # type: ignore[arg-type]
+    assert isinstance(captured.value.__cause__, AttributeError)
 
 
 @pytest.mark.parametrize(
