@@ -28,6 +28,7 @@ from retrieval_lab.application import (
 )
 from retrieval_lab.artifacts.results import load_result
 from retrieval_lab.benchmarks import BenchmarkDataset, load_beir_dataset
+from retrieval_lab.checkpointing import EvaluationCheckpoint, run_with_checkpoint
 from retrieval_lab.chunkers import FixedSizeChunker
 from retrieval_lab.comparison import (
     BootstrapDelta,
@@ -220,6 +221,7 @@ __all__ = [
     "DraftQuery",
     "EmbeddingBackend",
     "EmbeddingModelMetadata",
+    "EvaluationCheckpoint",
     "EvaluationConfig",
     "EvaluationDataset",
     "EvaluationError",
@@ -315,6 +317,7 @@ __all__ = [
     "retrieval_metric_explanations",
     "review_dataset_query",
     "run_configured_experiment",
+    "run_with_checkpoint",
     "token_f1",
     "validate_config_inputs",
     "validate_dataset",
