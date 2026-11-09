@@ -945,3 +945,140 @@ def test_config_loads_dense_retriever_text_and_bool_settings(
     assert dense.query_prompt == "search: "
     assert dense.document_prompt == "doc: "
     assert dense.normalize_embeddings is False
+
+
+def test_quality_gate_accepts_supported_latency_metric() -> None:
+    gate = QualityGateConfig(retriever="bm25", metric="latency_p95_ms", max_value=100.0)
+
+    assert gate.metric == "latency_p95_ms"
+
+
+@pytest.mark.parametrize("metric", ["recall", "recall@1@3"])
+def test_quality_gate_rejects_metric_without_single_cutoff(metric: str) -> None:
+    with pytest.raises(ConfigurationError, match="metric@positive_cutoff"):
+        QualityGateConfig(retriever="bm25", metric=metric, min_value=0.5)
+
+
+@pytest.mark.parametrize("metric", ["recall@0", "recall@03"])
+def test_quality_gate_rejects_non_canonical_cutoff(metric: str) -> None:
+    with pytest.raises(ConfigurationError, match="canonical"):
+        QualityGateConfig(retriever="bm25", metric=metric, min_value=0.5)
+
+
+def test_retriever_configs_reject_mismatched_type_literals() -> None:
+    with pytest.raises(ConfigurationError, match="must be 'bm25'"):
+        BM25RetrieverConfig(name="bm25", type="dense")  # type: ignore[arg-type]
+    with pytest.raises(ConfigurationError, match="must be 'dense'"):
+        DenseRetrieverConfig(name="dense", type="bm25")  # type: ignore[arg-type]
+    with pytest.raises(ConfigurationError, match="must be 'hybrid'"):
+        HybridRetrieverConfig(
+            name="hybrid",
+            sources=("keyword", "bm25"),
+            type="bm25",  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("sources", [("keyword", " "), ("keyword", 42)])
+def test_hybrid_sources_reject_blank_or_non_string_names(
+    sources: tuple[object, ...],
+) -> None:
+    with pytest.raises(ConfigurationError, match="non-empty strings"):
+        HybridRetrieverConfig(name="hybrid", sources=sources)  # type: ignore[arg-type]
+
+
+def test_evaluation_rejects_non_sequence_top_k() -> None:
+    with pytest.raises(ConfigurationError, match="top_k must be a sequence"):
+        EvaluationConfig(top_k=3)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("metrics", [("recall", ""), ("recall", 42)])
+def test_evaluation_rejects_blank_or_non_string_metrics(
+    metrics: tuple[object, ...],
+) -> None:
+    with pytest.raises(ConfigurationError, match="non-empty strings"):
+        EvaluationConfig(metrics=metrics)  # type: ignore[arg-type]
+
+
+def test_evaluation_rejects_duplicate_metrics() -> None:
+    with pytest.raises(ConfigurationError, match="must not contain duplicates"):
+        EvaluationConfig(
+            metrics=(
+                "hit_rate",
+                "recall",
+                "precision",
+                "mrr",
+                "ndcg",
+                "ap",
+                "recall",
+            )
+        )
+
+
+@pytest.mark.parametrize("formats", [("",), (42,)])
+def test_report_rejects_blank_or_non_string_formats(
+    formats: tuple[object, ...],
+) -> None:
+    with pytest.raises(ConfigurationError, match="non-empty strings"):
+        ReportConfig(formats=formats)  # type: ignore[arg-type]
+
+
+def _direct_config(tmp_path: Path, **changes: object) -> RetrievalConfig:
+    values: dict[str, object] = {
+        "schema_version": 1,
+        "corpus": CorpusConfig(path=tmp_path / "docs", chunker=ChunkerConfig()),
+        "dataset": DatasetConfig(path=tmp_path / "eval.jsonl"),
+        "retrievers": (KeywordRetrieverConfig(name="keyword"),),
+        "evaluation": EvaluationConfig(top_k=(1, 3)),
+    }
+    values.update(changes)
+    return RetrievalConfig(**values)  # type: ignore[arg-type]
+
+
+def test_quality_gate_cutoff_must_exist_in_evaluation_top_k(
+    tmp_path: Path,
+) -> None:
+    gate = QualityGateConfig(retriever="keyword", metric="recall@7", min_value=0.5)
+
+    with pytest.raises(
+        ConfigurationError, match=r"cutoff must be present in evaluation\.top_k"
+    ):
+        _direct_config(tmp_path, quality_gates=(gate,))
+
+
+def test_latency_quality_gate_skips_cutoff_membership_check(
+    tmp_path: Path,
+) -> None:
+    gate = QualityGateConfig(
+        retriever="keyword", metric="latency_mean_ms", max_value=50.0
+    )
+
+    config = _direct_config(tmp_path, quality_gates=(gate,))
+
+    assert config.quality_gates == (gate,)
+
+
+def test_to_dict_aliases_normalized_settings(tmp_path: Path) -> None:
+    config = _direct_config(tmp_path)
+
+    assert config.to_dict() == config.normalized_settings()
+
+
+def test_display_paths_hide_absolute_locations(tmp_path: Path) -> None:
+    outside = _direct_config(tmp_path, source_dir=tmp_path / "project")
+    assert outside.normalized_settings()["corpus"]["path"] == "<absolute>/docs"
+
+    no_base = _direct_config(tmp_path)
+    assert no_base.normalized_settings()["corpus"]["path"] == "<absolute>/docs"
+
+
+def test_display_path_keeps_relative_paths(tmp_path: Path) -> None:
+    config = _direct_config(
+        tmp_path,
+        corpus=CorpusConfig(path=Path("docs"), chunker=ChunkerConfig()),
+        dataset=DatasetConfig(path=Path("eval.jsonl")),
+    )
+
+    settings = config.normalized_settings()
+
+    assert settings["corpus"]["path"] == "docs"
+    assert settings["dataset"]["path"] == "eval.jsonl"
