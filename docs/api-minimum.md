@@ -58,6 +58,10 @@ Runner and result loading:
 - `EvaluationRunner`
 - `load_result`
 
+Evaluation checkpoints (crash-safe resume for large runs):
+
+- `EvaluationCheckpoint`, `run_with_checkpoint`
+
 Comparison:
 
 - `ComparisonTolerance`, `ComparabilityIssue`, `ComparabilityReport`

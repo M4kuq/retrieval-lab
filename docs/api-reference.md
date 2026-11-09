@@ -149,6 +149,16 @@ Caller-controlled generators; the library ships no provider client.
 - `GenerationOutput` — A validated generated answer plus observed generation latency.
 - `generate_answer` — Generate one answer and measure latency using a caller-controllable clock.
 
+## Evaluation checkpoints
+
+Crash-safe resume for large evaluations: each query's ranking is
+appended (and fsynced) to a JSONL checkpoint pinned to a
+caller-supplied run fingerprint, and a resumed run executes only the
+queries still missing.
+
+- `EvaluationCheckpoint` — An append-only JSONL store of per-query rankings for one run.
+- `run_with_checkpoint` — Run the queries missing from checkpoint and return all rankings.
+
 ## Benchmark loaders
 
 Offline loaders that convert standard benchmark layouts into native

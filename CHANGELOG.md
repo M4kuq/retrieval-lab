@@ -13,6 +13,11 @@ cut.
 
 ### Added
 
+- Evaluation checkpoints: `EvaluationCheckpoint` records each query's
+  ranking to a fingerprint-pinned JSONL file (flushed and fsynced per
+  record, torn final lines from a crash are dropped on reopen), and
+  `run_with_checkpoint()` resumes a large evaluation by running only
+  the queries still missing.
 - Benchmark loader: `load_beir_dataset()` reads a BEIR-format
   directory (`corpus.jsonl`, `queries.jsonl`, `qrels/<split>.tsv`)
   from disk into a `BenchmarkDataset` of native documents and an
