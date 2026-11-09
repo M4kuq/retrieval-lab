@@ -29,6 +29,7 @@ from retrieval_lab.application import (
 from retrieval_lab.artifacts.results import load_result
 from retrieval_lab.chunkers import FixedSizeChunker
 from retrieval_lab.comparison import (
+    BootstrapDelta,
     ComparabilityIssue,
     ComparabilityReport,
     ComparisonTolerance,
@@ -36,6 +37,7 @@ from retrieval_lab.comparison import (
     MetricDelta,
     QueryDeltaExtreme,
     RunComparison,
+    bootstrap_metric_delta,
     check_comparability,
     compare_runs,
 )
@@ -156,6 +158,7 @@ __all__ = [
     "BM25Retriever",
     "BM25RetrieverConfig",
     "BaseRetriever",
+    "BootstrapDelta",
     "CallableGenerator",
     "CallableRetriever",
     "CallableSyntheticGenerator",
@@ -238,6 +241,7 @@ __all__ = [
     "SyntheticGenerateCallable",
     "SyntheticQueryGenerator",
     "ValidationResult",
+    "bootstrap_metric_delta",
     "check_comparability",
     "compare_result_files",
     "compare_retrievers_for_query",

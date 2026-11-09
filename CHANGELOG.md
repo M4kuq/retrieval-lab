@@ -13,6 +13,10 @@ cut.
 
 ### Added
 
+- Comparison statistics: `bootstrap_metric_delta()` resamples the paired
+  per-query deltas of a `MetricComparison` and returns a `BootstrapDelta`
+  with a percentile bootstrap confidence interval, a two-sided bootstrap
+  p-value, and a significance flag, all deterministic under a caller seed.
 - Dataset inspection foundation: `inspect_dataset()` validates an evaluation
   dataset against a corpus and returns a typed `DatasetInspectionReport` with
   stable issue codes (v0.2).

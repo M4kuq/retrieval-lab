@@ -6,6 +6,7 @@ from typing import cast
 import pytest
 
 from retrieval_lab import (
+    BootstrapDelta,
     ComparabilityIssue,
     ComparabilityReport,
     ComparisonTolerance,
@@ -18,6 +19,7 @@ from retrieval_lab import (
     QueryEvaluation,
     RetrieverMetrics,
     RunComparison,
+    bootstrap_metric_delta,
     check_comparability,
     compare_runs,
 )
@@ -874,3 +876,133 @@ def test_latency_missing_from_baseline_is_diagnostic() -> None:
         and not item.blocking
         for item in report.diagnostics
     )
+
+
+def _bootstrap_comparison(deltas: Sequence[float]) -> MetricComparison:
+    query_deltas = tuple(
+        _valid_delta(
+            baseline=0.5,
+            candidate=0.5 + delta,
+            absolute_delta=delta,
+            relative_delta=delta / 0.5,
+            classification=(
+                "improved" if delta > 0 else "regressed" if delta < 0 else "unchanged"
+            ),
+            query_id=f"q{index}",
+        )
+        for index, delta in enumerate(deltas)
+    )
+    aggregate = _valid_delta(
+        baseline=0.5,
+        candidate=0.5 + sum(deltas) / len(deltas),
+        absolute_delta=sum(deltas) / len(deltas),
+        relative_delta=sum(deltas) / len(deltas) / 0.5,
+        classification="improved" if sum(deltas) > 0 else "unchanged",
+    )
+    return MetricComparison("bm25", "recall", 1, aggregate, query_deltas=query_deltas)
+
+
+def test_bootstrap_constant_deltas_have_a_point_interval() -> None:
+    result = bootstrap_metric_delta(_bootstrap_comparison([0.5, 0.5, 0.5]))
+
+    assert result.retriever == "bm25"
+    assert result.metric == "recall"
+    assert result.cutoff == 1
+    assert result.direction == "higher_is_better"
+    assert result.query_count == 3
+    assert result.observed_delta == 0.5
+    assert result.ci_lower == 0.5
+    assert result.ci_upper == 0.5
+    assert result.p_value == 0.0
+    assert result.significant is True
+    assert result.resamples == 1000
+    assert result.seed == 42
+    assert result.confidence_level == 0.95
+
+
+def test_bootstrap_zero_deltas_are_not_significant() -> None:
+    result = bootstrap_metric_delta(_bootstrap_comparison([0.0, 0.0, 0.0]))
+
+    assert result.observed_delta == 0.0
+    assert result.ci_lower == 0.0
+    assert result.ci_upper == 0.0
+    assert result.p_value == 1.0
+    assert result.significant is False
+
+
+def test_bootstrap_symmetric_deltas_straddle_zero() -> None:
+    comparison = _bootstrap_comparison([-0.5, 0.5])
+    result = bootstrap_metric_delta(comparison, resamples=2000)
+
+    assert result.observed_delta == 0.0
+    assert result.ci_lower == -0.5
+    assert result.ci_upper == 0.5
+    assert result.p_value > 0.5
+    assert result.significant is False
+    assert bootstrap_metric_delta(comparison, resamples=2000) == result
+
+
+def test_bootstrap_matches_compare_runs_aggregate_delta() -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)})
+    candidate = _result({"bm25": (0.4, 0.6, 0.8)})
+    comparison = compare_runs(baseline, candidate)
+    metric_comparison = comparison.metrics["bm25"][0]
+
+    result = bootstrap_metric_delta(metric_comparison, resamples=500)
+
+    assert result.observed_delta == pytest.approx(
+        metric_comparison.aggregate.absolute_delta
+    )
+    assert result.ci_lower > 0.0
+    assert result.significant is True
+
+
+def test_bootstrap_rejects_invalid_arguments() -> None:
+    comparison = _bootstrap_comparison([0.5])
+    with pytest.raises(EvaluationError, match="MetricComparison"):
+        bootstrap_metric_delta(object())  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="resamples"):
+        bootstrap_metric_delta(comparison, resamples=0)
+    with pytest.raises(EvaluationError, match="resamples"):
+        bootstrap_metric_delta(comparison, resamples=True)
+    with pytest.raises(EvaluationError, match="confidence_level"):
+        bootstrap_metric_delta(comparison, confidence_level=1.0)
+    with pytest.raises(EvaluationError, match="confidence_level"):
+        bootstrap_metric_delta(comparison, confidence_level=0.0)
+    with pytest.raises(EvaluationError, match="seed"):
+        bootstrap_metric_delta(comparison, seed="42")  # type: ignore[arg-type]
+    empty = MetricComparison("bm25", "recall", 1, _valid_delta(), query_deltas=())
+    with pytest.raises(EvaluationError, match="per-query"):
+        bootstrap_metric_delta(empty)
+
+
+def test_bootstrap_delta_rejects_inconsistent_values() -> None:
+    values: dict[str, object] = {
+        "retriever": "bm25",
+        "metric": "recall",
+        "cutoff": 1,
+        "direction": "higher_is_better",
+        "query_count": 3,
+        "observed_delta": 0.5,
+        "ci_lower": 0.4,
+        "ci_upper": 0.6,
+        "confidence_level": 0.95,
+        "resamples": 1000,
+        "seed": 42,
+        "p_value": 0.01,
+        "significant": True,
+    }
+    assert BootstrapDelta(**values)  # type: ignore[arg-type]
+    for changes in (
+        {"ci_lower": 0.7},
+        {"p_value": 1.5},
+        {"significant": False},
+        {"confidence_level": 1.0},
+        {"query_count": 0},
+        {"seed": True},
+        {"direction": "other"},
+    ):
+        bad = dict(values)
+        bad.update(changes)
+        with pytest.raises(EvaluationError):
+            BootstrapDelta(**bad)  # type: ignore[arg-type]
