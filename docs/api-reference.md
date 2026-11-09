@@ -149,6 +149,20 @@ Caller-controlled generators; the library ships no provider client.
 - `GenerationOutput` — A validated generated answer plus observed generation latency.
 - `generate_answer` — Generate one answer and measure latency using a caller-controllable clock.
 
+## RAG quality metrics
+
+RAGAS-style formulas computed from structured inputs — which context
+items were relevant and which answer claims the context supports — so
+every score is reproducible offline; claim extraction and support
+judgments stay caller-controlled.
+
+- `faithfulness` — Return the fraction of assessed claims supported by the context.
+- `context_precision` — Return rank-weighted context precision over the full context list.
+- `context_recall` — Return the fraction of relevant items present in the context list.
+- `ClaimAssessment` — One answer claim and whether the retrieved context supports it.
+- `RagEvaluation` — RAG quality measurements for one answered query.
+- `evaluate_rag_answer` — Evaluate one RAG answer's context quality and claim faithfulness.
+
 ## LLM-as-judge
 
 Caller-controlled judges in the same style as answer generators: the

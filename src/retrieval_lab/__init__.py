@@ -137,6 +137,14 @@ from retrieval_lab.judging import (
 )
 from retrieval_lab.loaders import load_documents
 from retrieval_lab.quality import evaluate_quality_gates
+from retrieval_lab.rag_metrics import (
+    ClaimAssessment,
+    RagEvaluation,
+    context_precision,
+    context_recall,
+    evaluate_rag_answer,
+    faithfulness,
+)
 from retrieval_lab.retrievers import (
     AsyncCallableRetriever,
     AsyncRetriever,
@@ -181,6 +189,7 @@ __all__ = [
     "CallableSyntheticGenerator",
     "Chunk",
     "ChunkerConfig",
+    "ClaimAssessment",
     "ComparabilityIssue",
     "ComparabilityReport",
     "ComparisonOutput",
@@ -253,6 +262,7 @@ __all__ = [
     "QueryDeltaExtreme",
     "QueryEvaluation",
     "QueryEvidence",
+    "RagEvaluation",
     "RelevanceLevel",
     "ReportConfig",
     "RetrievalConfig",
@@ -272,15 +282,19 @@ __all__ = [
     "compare_result_files",
     "compare_retrievers_for_query",
     "compare_runs",
+    "context_precision",
+    "context_recall",
     "dataset_draft_status",
     "evaluate_answer",
     "evaluate_answers",
     "evaluate_async_retrievers",
     "evaluate_configured_quality_gates",
     "evaluate_quality_gates",
+    "evaluate_rag_answer",
     "evaluate_results",
     "evaluate_retrievers",
     "exact_match",
+    "faithfulness",
     "finalize_dataset_bundle",
     "generate_answer",
     "generate_synthetic_draft",

@@ -13,6 +13,11 @@ cut.
 
 ### Added
 
+- RAG quality metrics: `faithfulness()`, `context_precision()`, and
+  `context_recall()` compute the RAGAS-style formulas from
+  caller-supplied claim assessments (`ClaimAssessment`) and relevance
+  judgments, and `evaluate_rag_answer()` bundles them into a
+  `RagEvaluation` record per query.
 - LLM-as-judge support: `judge_answer()` and `judge_answer_with_panel()`
   run caller-controlled judges over generated answers with a validated
   prompt template (`JudgePromptTemplate`, `DEFAULT_JUDGE_PROMPT_TEMPLATE`),
