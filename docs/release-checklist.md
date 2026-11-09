@@ -23,12 +23,26 @@ deliberately manual.
 
 ## Publication approval boundary
 
-Each action below may run only after the user gives explicit approval for
-that specific publication action. CI and this repository do not perform them:
+Publication runs through the tag-driven `release.yml` workflow, which
+publishes to PyPI with Trusted Publishing (OIDC); no PyPI token or secret is
+stored anywhere. The workflow can only run after both prerequisites below are
+complete, and pushing the version tag remains the explicit approval act:
 
-- [ ] Upload to TestPyPI.
-- [ ] Upload to PyPI.
-- [ ] Create or push a Git tag.
+- [ ] One-time PyPI-side setup (project owner only): register a Trusted
+      Publisher for the `retrieval-lab-sdk` project on PyPI with owner
+      `M4kuq`, repository `retrieval-lab`, workflow `release.yml`, and
+      environment `pypi`. For a first release, add it as a pending publisher
+      on PyPI before the tag is pushed.
+- [ ] Confirm the `pypi` environment exists in the GitHub repository settings
+      (it carries no secrets; it exists so the OIDC claim matches).
+
+Each action below may run only after the user gives explicit approval for
+that specific publication action:
+
+- [ ] Create and push the version tag (for example `v0.1.0rc1`); the tag name
+      must match the `pyproject.toml` version exactly, which the workflow
+      verifies before building.
+- [ ] Upload to TestPyPI (manual dry run, outside the release workflow).
 - [ ] Create a GitHub Release.
 - [ ] Deploy GitHub Pages.
 
