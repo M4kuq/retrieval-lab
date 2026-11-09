@@ -23,7 +23,11 @@ from retrieval_lab import (
     evaluate_async_retrievers,
     evaluate_retrievers,
 )
-from retrieval_lab.exceptions import ConfigurationError, RetrieverContractError
+from retrieval_lab.exceptions import (
+    ConfigurationError,
+    DatasetValidationError,
+    RetrieverContractError,
+)
 
 
 def _run(coroutine: object) -> object:
@@ -751,3 +755,261 @@ def test_async_retriever_mapping_contract_and_custom_protocol() -> None:
                 top_k=[1],
             )
         )
+
+
+def test_async_evaluation_rejects_a_non_dataset_value() -> None:
+    async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [RetrievedItem("chunk-a")]
+
+    with pytest.raises(DatasetValidationError, match="must be an EvaluationDataset"):
+        _run(
+            evaluate_async_retrievers(
+                dataset=cast(EvaluationDataset, "not-a-dataset"),
+                retrievers={"a": AsyncCallableRetriever("a", search)},
+                top_k=[1],
+            )
+        )
+
+
+@pytest.mark.parametrize("retrievers", [{}, []])
+def test_async_evaluation_rejects_an_empty_retriever_mapping(
+    retrievers: object,
+) -> None:
+    with pytest.raises(ConfigurationError, match="non-empty mapping"):
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers=cast("dict[str, AsyncRetriever]", retrievers),
+                top_k=[1],
+            )
+        )
+
+
+@pytest.mark.parametrize("key", ["", "  ", 123])
+def test_async_evaluation_rejects_blank_retriever_mapping_keys(key: object) -> None:
+    class Custom:
+        name = "custom"
+
+        async def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            return [RetrievedItem("chunk-a")]
+
+    with pytest.raises(ConfigurationError, match="keys must be non-empty strings"):
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers=cast("dict[str, AsyncRetriever]", {key: Custom()}),
+                top_k=[1],
+            )
+        )
+
+
+def test_async_evaluation_rejects_an_unreadable_retriever_name() -> None:
+    class ExplodingName:
+        @property
+        def name(self) -> str:
+            raise RuntimeError("name unavailable")
+
+        async def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            return [RetrievedItem("chunk-a")]
+
+    with pytest.raises(
+        ConfigurationError, match="must implement the AsyncRetriever protocol"
+    ) as raised:
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"x": cast(AsyncRetriever, ExplodingName())},
+                top_k=[1],
+            )
+        )
+    assert isinstance(raised.value.__cause__, RuntimeError)
+
+
+def test_async_evaluation_rejects_a_non_callable_retrieve() -> None:
+    class NonCallableRetrieve:
+        name = "fake"
+        retrieve = 123
+
+    with pytest.raises(
+        ConfigurationError, match="must implement the AsyncRetriever protocol"
+    ) as raised:
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"fake": cast(AsyncRetriever, NonCallableRetrieve())},
+                top_k=[1],
+            )
+        )
+    assert raised.value.__cause__ is None
+
+
+def test_async_evaluation_rejects_a_blank_retriever_name() -> None:
+    class BlankName:
+        name = ""
+
+        async def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            return [RetrievedItem("chunk-a")]
+
+    with pytest.raises(ConfigurationError, match="names must be non-empty strings"):
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"fake": cast(AsyncRetriever, BlankName())},
+                top_k=[1],
+            )
+        )
+
+
+def test_async_raw_retriever_failures_are_wrapped_with_query_context() -> None:
+    cause = RuntimeError("provider failed")
+
+    class RawFailing:
+        name = "raw"
+
+        async def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            raise cause
+
+    with pytest.raises(
+        RetrieverContractError, match=r"retriever 'raw' failed for query 'q-1'$"
+    ) as raised:
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"raw": cast(AsyncRetriever, RawFailing())},
+                top_k=[1],
+            )
+        )
+    assert raised.value.__cause__ is cause
+
+
+def test_async_raw_retriever_contract_violations_are_wrapped() -> None:
+    class RawDuplicates:
+        name = "raw"
+
+        async def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            return [RetrievedItem("chunk-a"), RetrievedItem("chunk-a")]
+
+    with pytest.raises(RetrieverContractError, match="violated the result contract"):
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"raw": cast(AsyncRetriever, RawDuplicates())},
+                top_k=[2],
+            )
+        )
+
+
+def test_async_evaluation_rejects_a_non_monotonic_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readings = iter([200, 100])
+    monkeypatch.setattr(
+        async_callable_module, "perf_counter_ns", lambda: next(readings)
+    )
+
+    async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [RetrievedItem("chunk-a")]
+
+    with pytest.raises(
+        ConfigurationError, match="clock readings must be monotonic"
+    ) as raised:
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"a": AsyncCallableRetriever("a", search)},
+                top_k=[1],
+            )
+        )
+    assert raised.value.__cause__ is None
+
+
+def test_async_bare_contract_errors_from_workers_are_reraised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_clock() -> int:
+        raise RetrieverContractError("clock unavailable")
+
+    monkeypatch.setattr(async_callable_module, "perf_counter_ns", broken_clock)
+
+    async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [RetrievedItem("chunk-a")]
+
+    with pytest.raises(RetrieverContractError, match="clock unavailable") as raised:
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"a": AsyncCallableRetriever("a", search)},
+                top_k=[1],
+            )
+        )
+    assert raised.value.__cause__ is None
+
+
+def test_async_unexpected_worker_errors_become_contract_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_clock() -> int:
+        raise RuntimeError("clock broke")
+
+    monkeypatch.setattr(async_callable_module, "perf_counter_ns", broken_clock)
+
+    async def search(query: str, *, top_k: int) -> list[RetrievedItem]:
+        return [RetrievedItem("chunk-a")]
+
+    with pytest.raises(
+        RetrieverContractError, match="asynchronous retrieval failed"
+    ) as raised:
+        _run(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"a": AsyncCallableRetriever("a", search)},
+                top_k=[1],
+            )
+        )
+    assert isinstance(raised.value.__cause__, RuntimeError)
+
+
+def test_async_external_cancellation_with_async_cleanup_is_reraised() -> None:
+    started = asyncio.Event()
+
+    async def awaiting_cleanup(query: str, *, top_k: int) -> list[RetrievedItem]:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+        return []
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            evaluate_async_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={"a": AsyncCallableRetriever("a", awaiting_cleanup)},
+                top_k=[1],
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    _run(scenario())
+
+
+def test_first_task_error_prefers_typed_errors_from_groups() -> None:
+    contract = RetrieverContractError("contract")
+    group = BaseExceptionGroup("group", [ValueError("generic"), contract])
+
+    assert async_callable_module._first_task_error(group) is contract
+
+    configuration = ConfigurationError("configuration")
+    nested = BaseExceptionGroup(
+        "outer",
+        [BaseExceptionGroup("inner", [ValueError("generic")]), configuration],
+    )
+    assert async_callable_module._first_task_error(nested) is configuration
+
+    generic = ValueError("first")
+    plain = BaseExceptionGroup("plain", [generic, KeyError("second")])
+    assert async_callable_module._first_task_error(plain) is generic
+    assert async_callable_module._first_task_error(generic) is generic
