@@ -149,6 +149,14 @@ Caller-controlled generators; the library ships no provider client.
 - `GenerationOutput` — A validated generated answer plus observed generation latency.
 - `generate_answer` — Generate one answer and measure latency using a caller-controllable clock.
 
+## Benchmark loaders
+
+Offline loaders that convert standard benchmark layouts into native
+records; downloading stays with the caller.
+
+- `BenchmarkDataset` — A loaded benchmark: its corpus documents and evaluation dataset.
+- `load_beir_dataset` — Load a BEIR-format dataset directory from disk.
+
 ## RAG quality metrics
 
 RAGAS-style formulas computed from structured inputs — which context
