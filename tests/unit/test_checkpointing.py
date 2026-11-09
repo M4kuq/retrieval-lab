@@ -204,6 +204,50 @@ def test_failed_record_rolls_back_and_retry_on_same_instance_works(
     assert reread.completed_query_ids == frozenset({"q1", "q2"})
 
 
+def test_stat_failure_before_append_never_deletes_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "stat-failure.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    checkpoint.record(_result("q1"))
+    content_before = path.read_bytes()
+
+    real_stat = Path.stat
+    state = {"fail": True}
+
+    def flaky_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if state["fail"] and self == path:
+            state["fail"] = False
+            raise PermissionError("simulated stat failure")
+        return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+    with pytest.raises(EvaluationError):
+        checkpoint.record(_result("q2"))
+    assert path.read_bytes() == content_before
+    reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert reread.completed_query_ids == frozenset({"q1"})
+
+
+def test_creation_write_failure_leaves_no_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "subdir" / "created.jsonl"
+
+    def broken_fsync(descriptor: int) -> None:
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(os, "fsync", broken_fsync)
+    with pytest.raises(EvaluationError) as excinfo:
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert isinstance(excinfo.value.__cause__, OSError)
+    assert not path.exists()
+
+    monkeypatch.undo()
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert len(checkpoint) == 0
+
+
 def test_unrecoverable_write_failure_poisons_the_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -218,8 +262,9 @@ def test_unrecoverable_write_failure_poisons_the_instance(
 
     monkeypatch.setattr(os, "fsync", broken_fsync)
     monkeypatch.setattr(EvaluationCheckpoint, "_truncate", broken_truncate)
-    with pytest.raises(EvaluationError):
+    with pytest.raises(EvaluationError) as excinfo:
         checkpoint.record(_result("q1"))
+    assert isinstance(excinfo.value.__cause__, OSError)
     with pytest.raises(EvaluationError, match="unusable after a failed write"):
         checkpoint.record(_result("q1"))
 

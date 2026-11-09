@@ -145,9 +145,17 @@ class EvaluationCheckpoint:
             )
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         try:
-            size_before = self._path.stat().st_size
-        except OSError:
+            size_before: int | None = self._path.stat().st_size
+        except FileNotFoundError:
             size_before = None
+        except OSError as error:
+            # Nothing has been written yet, and without a trustworthy
+            # pre-write size a later rollback could not tell this file
+            # apart from one this call created — refuse to write.
+            raise EvaluationError(
+                f"{self._path}: cannot inspect checkpoint file before "
+                f"appending: {error}"
+            ) from error
         try:
             with self._path.open("a", encoding="utf-8") as handle:
                 if self._missing_trailing_newline():
