@@ -683,3 +683,265 @@ def test_retrieval_config_rejects_invalid_nested_contracts(tmp_path: Path) -> No
         values = {**base, **overrides}
         with pytest.raises(ConfigurationError, match=expected):
             RetrievalConfig(**values)  # type: ignore[arg-type]
+
+
+def _replace_block(
+    tmp_path: Path, start_marker: str, end_marker: str, replacement: str
+) -> Path:
+    path = _write_fixture(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    start = text.index(start_marker)
+    end = text.index(end_marker)
+    path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+    return path
+
+
+def _replace_retrievers(tmp_path: Path, replacement: str) -> Path:
+    return _replace_block(tmp_path, "retrievers:\n", "evaluation:\n", replacement)
+
+
+def test_load_config_rejects_invalid_path_type() -> None:
+    with pytest.raises(ConfigurationError, match="config path must be a valid path"):
+        load_config(None)  # type: ignore[arg-type]
+
+
+def test_load_config_resolves_relative_path_from_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _write_fixture(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    loaded = load_config(Path(path.name))
+
+    assert loaded.source_dir == tmp_path.resolve()
+    assert loaded.corpus.path == (tmp_path / "docs").resolve()
+
+
+def test_load_config_keeps_absolute_corpus_path(tmp_path: Path) -> None:
+    path = _write_fixture(tmp_path)
+    absolute = str(tmp_path / "docs")
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("path: docs", f"path: {absolute}"),
+        encoding="utf-8",
+    )
+
+    loaded = load_config(path)
+
+    assert loaded.corpus.path == (tmp_path / "docs").resolve()
+
+
+def test_config_rejects_cache_dir_defined_twice(tmp_path: Path) -> None:
+    path = _write_fixture(tmp_path, extra="cache_dir: root-cache\n")
+
+    with pytest.raises(ConfigurationError, match=r"duplicates experiment\.cache_dir"):
+        load_config(path)
+
+
+def test_config_root_cache_dir_fills_experiment_cache_dir(tmp_path: Path) -> None:
+    path = _write_fixture(tmp_path, extra="cache_dir: root-cache\n")
+    text = path.read_text(encoding="utf-8").replace("  cache_dir: cache\n", "")
+    assert "cache_dir: cache" not in text
+    path.write_text(text, encoding="utf-8")
+
+    loaded = load_config(path)
+
+    assert loaded.experiment.cache_dir == (tmp_path / "root-cache").resolve()
+
+
+def test_config_rejects_quality_gate_for_unknown_retriever(tmp_path: Path) -> None:
+    path = _write_fixture(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "- retriever: keyword", "- retriever: missing"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="unknown retriever 'missing'"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("metrics", "expected", "unexpected"),
+    [
+        ("ndcg", "must be a list of strings", None),
+        (
+            "[hit_rate, recall, precision, mrr, ndcg, ap, bogus]",
+            "unsupported metric 'bogus'",
+            None,
+        ),
+        (
+            "[hit_rate, hit_rate, recall, precision, mrr, ndcg, ap]",
+            "must not contain duplicates",
+            "must contain all six",
+        ),
+    ],
+)
+def test_config_rejects_invalid_metrics(
+    tmp_path: Path, metrics: str, expected: str, unexpected: str | None
+) -> None:
+    path = _write_fixture(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "metrics: [hit_rate, recall, precision, mrr, ndcg, ap]",
+            f"metrics: {metrics}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError) as captured:
+        load_config(path)
+
+    message = str(captured.value)
+    assert expected in message
+    if unexpected is not None:
+        assert unexpected not in message
+
+
+def test_config_rejects_retriever_name_that_differs_from_type(
+    tmp_path: Path,
+) -> None:
+    path = _replace_retrievers(
+        tmp_path,
+        "retrievers:\n  - name: other\n    type: keyword\n",
+    )
+
+    with pytest.raises(ConfigurationError, match="must equal type 'keyword'"):
+        load_config(path)
+
+
+def test_config_rejects_duplicate_retriever_names(tmp_path: Path) -> None:
+    path = _replace_retrievers(
+        tmp_path,
+        "retrievers:\n"
+        "  - name: keyword\n"
+        "    type: keyword\n"
+        "  - name: keyword\n"
+        "    type: keyword\n",
+    )
+
+    with pytest.raises(ConfigurationError, match="duplicate retriever name 'keyword'"):
+        load_config(path)
+
+
+def test_config_rejects_unsupported_bm25_tokenizer(tmp_path: Path) -> None:
+    path = _replace_retrievers(
+        tmp_path,
+        "retrievers:\n  - name: bm25\n    type: bm25\n    tokenizer: custom\n",
+    )
+
+    with pytest.raises(ConfigurationError, match="unsupported tokenizer 'custom'"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("k1", "expected"),
+    [
+        ("0", "must be greater than zero"),
+        ("high", "must be a finite number"),
+        (".inf", "must be a finite number"),
+        ("1" + "0" * 400, "must be a finite number"),
+    ],
+)
+def test_config_rejects_invalid_bm25_k1(tmp_path: Path, k1: str, expected: str) -> None:
+    path = _replace_retrievers(
+        tmp_path,
+        f"retrievers:\n  - name: bm25\n    type: bm25\n    k1: {k1}\n",
+    )
+
+    with pytest.raises(ConfigurationError, match=expected):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("batch_size: 0", "batch_size.*must be a positive integer"),
+        ("query_prompt: 5", "query_prompt.*must be a string"),
+        ("normalize_embeddings: 5", "normalize_embeddings.*must be boolean"),
+    ],
+)
+def test_config_rejects_invalid_dense_fields(
+    tmp_path: Path, field: str, expected: str
+) -> None:
+    path = _replace_retrievers(
+        tmp_path,
+        f"retrievers:\n  - name: dense\n    type: dense\n    {field}\n",
+    )
+
+    with pytest.raises(ConfigurationError, match=expected):
+        load_config(path)
+
+
+_HYBRID_BASE = (
+    "retrievers:\n"
+    "  - name: keyword\n"
+    "    type: keyword\n"
+    "  - name: bm25\n"
+    "    type: bm25\n"
+    "  - name: hybrid\n"
+    "    type: hybrid\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("hybrid_lines", "expected"),
+    [
+        ("    sources: keyword\n", "must be a list of retriever names"),
+        (
+            "    sources: [keyword, bm25]\n    fusion: weighted\n",
+            "fusion.*must be 'rrf'",
+        ),
+        (
+            "    sources: [keyword, bm25]\n    rrf_k: 0\n",
+            "rrf_k.*must be a positive integer",
+        ),
+        (
+            "    sources: [keyword, bm25]\n    candidate_k: 0\n",
+            "candidate_k.*must be a positive integer",
+        ),
+        ("    sources: [keyword]\n", "at least two"),
+        ("    sources: [keyword, ghost]\n", "unknown retriever 'ghost'"),
+        ("    sources: [keyword, hybrid]\n", "cannot reference itself"),
+    ],
+)
+def test_config_rejects_invalid_hybrid_definitions(
+    tmp_path: Path, hybrid_lines: str, expected: str
+) -> None:
+    path = _replace_retrievers(tmp_path, _HYBRID_BASE + hybrid_lines)
+
+    with pytest.raises(ConfigurationError, match=expected):
+        load_config(path)
+
+
+def test_config_rejects_non_list_quality_gates(tmp_path: Path) -> None:
+    path = _replace_block(
+        tmp_path, "quality_gates:\n", "report:\n", "quality_gates: none\n"
+    )
+
+    with pytest.raises(ConfigurationError, match="quality_gates: must be a list"):
+        load_config(path)
+
+
+def test_config_loads_dense_retriever_text_and_bool_settings(
+    tmp_path: Path,
+) -> None:
+    path = _replace_retrievers(
+        tmp_path,
+        "retrievers:\n"
+        "  - name: keyword\n"
+        "    type: keyword\n"
+        "  - name: dense\n"
+        "    type: dense\n"
+        "    query_prompt: 'search: '\n"
+        "    document_prompt: 'doc: '\n"
+        "    normalize_embeddings: false\n",
+    )
+
+    loaded = load_config(path)
+
+    dense = loaded.retrievers[1]
+    assert isinstance(dense, DenseRetrieverConfig)
+    assert dense.query_prompt == "search: "
+    assert dense.document_prompt == "doc: "
+    assert dense.normalize_embeddings is False
