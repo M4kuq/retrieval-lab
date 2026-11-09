@@ -92,6 +92,48 @@ def test_checkpoint_drops_torn_final_line(tmp_path: Path) -> None:
     assert reread.completed_query_ids == frozenset({"q1", "q2"})
 
 
+def _write_checkpoint_file(
+    path: Path, lines: list[str], *, trailing_newline: bool
+) -> None:
+    content = "\n".join(lines) + ("\n" if trailing_newline else "")
+    path.write_text(content, encoding="utf-8")
+
+
+def _header_line(**overrides: object) -> str:
+    header: dict[str, object] = {
+        "format": "retrieval-lab-evaluation-checkpoint",
+        "version": 1,
+        "fingerprint": FINGERPRINT,
+    }
+    header.update(overrides)
+    return json.dumps(header)
+
+
+def test_checkpoint_appends_after_unterminated_final_line(tmp_path: Path) -> None:
+    record = json.dumps({"query_id": "q1", "retrieved_document_ids": ["d1"]})
+    for name, lines in (
+        ("header-only.jsonl", [_header_line()]),
+        ("with-record.jsonl", [_header_line(), record]),
+    ):
+        path = tmp_path / name
+        _write_checkpoint_file(path, lines, trailing_newline=False)
+        checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+        checkpoint.record(_result("q2"))
+        reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+        expected = {"q2"} if name.startswith("header") else {"q1", "q2"}
+        assert reread.completed_query_ids == frozenset(expected)
+
+
+@pytest.mark.parametrize("version", [True, 1.0, 2, "1"])
+def test_checkpoint_rejects_non_integer_or_unknown_versions(
+    tmp_path: Path, version: object
+) -> None:
+    path = tmp_path / "versioned.jsonl"
+    _write_checkpoint_file(path, [_header_line(version=version)], trailing_newline=True)
+    with pytest.raises(EvaluationError, match="version"):
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+
 def test_run_with_checkpoint_runs_only_missing_queries(tmp_path: Path) -> None:
     path = tmp_path / "run.jsonl"
     queries = [_query("q1"), _query("q2"), _query("q3")]

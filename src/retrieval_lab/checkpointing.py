@@ -12,7 +12,10 @@ the format name, a format version, and a caller-supplied
 dataset, retriever configuration, and top-k values). Reopening a
 checkpoint with a different fingerprint fails, so results from a
 different configuration can never leak into a resumed run. Every
-record is flushed and fsynced before the next query starts.
+record is flushed and fsynced before the next query starts, and on
+POSIX systems the containing directory is synced when the checkpoint
+file is created, so the file's existence also survives an OS crash;
+on other platforms the durability guarantee covers process crashes.
 """
 
 from __future__ import annotations
@@ -35,6 +38,21 @@ _FORMAT_NAME = "retrieval-lab-evaluation-checkpoint"
 _FORMAT_VERSION = 1
 
 
+def _sync_directory(directory: Path) -> None:
+    if os.name != "posix":
+        return
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 class EvaluationCheckpoint:
     """An append-only JSONL store of per-query rankings for one run."""
 
@@ -50,6 +68,7 @@ class EvaluationCheckpoint:
         else:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._write_line(self._header())
+            _sync_directory(self._path.parent)
 
     @property
     def path(self) -> Path:
@@ -105,9 +124,26 @@ class EvaluationCheckpoint:
     def _write_line(self, payload: dict[str, object]) -> None:
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         with self._path.open("a", encoding="utf-8") as handle:
+            if self._missing_trailing_newline():
+                # A crash between writing a record's JSON body and its
+                # newline leaves a valid but unterminated final line;
+                # terminate it before appending or the two records
+                # would concatenate into one corrupt line.
+                handle.write("\n")
             handle.write(line + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+
+    def _missing_trailing_newline(self) -> bool:
+        try:
+            with self._path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    return False
+                handle.seek(-1, os.SEEK_END)
+                return handle.read(1) != b"\n"
+        except FileNotFoundError:
+            return False
 
     def _load(self) -> None:
         pieces = self._path.read_bytes().split(b"\n")
@@ -151,10 +187,10 @@ class EvaluationCheckpoint:
             raise EvaluationError(
                 f"{self._path}:1: not a retrieval-lab evaluation checkpoint"
             )
-        if parsed.get("version") != _FORMAT_VERSION:
+        version = parsed.get("version")
+        if type(version) is not int or version != _FORMAT_VERSION:
             raise EvaluationError(
-                f"{self._path}:1: unsupported checkpoint version "
-                f"{parsed.get('version')!r}"
+                f"{self._path}:1: unsupported checkpoint version {version!r}"
             )
         if parsed.get("fingerprint") != self._fingerprint:
             raise EvaluationError(
@@ -220,7 +256,7 @@ def run_with_checkpoint(
         raise EvaluationError("run_query must be callable")
     by_id = {result.query_id: result for result in checkpoint.results()}
     for query in ordered:
-        if query.id in checkpoint.completed_query_ids:
+        if query.id in by_id:
             continue
         result = run_query(query)
         if not isinstance(result, RetrievedQueryResult):
