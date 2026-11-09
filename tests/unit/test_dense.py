@@ -718,6 +718,10 @@ def test_cache_export_requires_an_index() -> None:
     with pytest.raises(RetrieverContractError, match="no cacheable index"):
         retriever._cache_export()
 
+    retriever.index([])
+    with pytest.raises(RetrieverContractError, match="no cacheable index"):
+        retriever._cache_export()
+
 
 def test_cache_restore_rejects_empty_chunks() -> None:
     retriever = DenseRetriever(backend=FakeEmbeddingBackend({}))
@@ -797,23 +801,28 @@ def test_metadata_must_be_an_embedding_model_metadata_value() -> None:
 
 
 @pytest.mark.parametrize(
-    ("matrix", "message"),
+    ("matrix", "message", "cause_type"),
     [
-        ({"vectors": [[1.0]]}, "invalid documents matrix"),
-        (42, "invalid documents matrix"),
-        (["abc"], "row 0 must be a numeric vector"),
-        ([42], "row 0 must be a numeric vector"),
+        ({"vectors": [[1.0]]}, "invalid documents matrix", None),
+        (42, "invalid documents matrix", TypeError),
+        (["abc"], "row 0 must be a numeric vector", None),
+        ([42], "row 0 must be a numeric vector", TypeError),
     ],
 )
 def test_index_rejects_non_matrix_backend_responses(
     matrix: object,
     message: str,
+    cause_type: type[TypeError] | None,
 ) -> None:
     backend = FakeEmbeddingBackend({("passage: document",): matrix})
     retriever = DenseRetriever(backend=backend, normalize_embeddings=False)
 
-    with pytest.raises(RetrieverContractError, match=message):
+    with pytest.raises(RetrieverContractError, match=message) as raised:
         retriever.index([_chunk("document", "document")])
+    if cause_type is None:
+        assert raised.value.__cause__ is None
+    else:
+        assert isinstance(raised.value.__cause__, cause_type)
 
 
 def test_resolved_revision_falls_back_to_tokenizer_metadata() -> None:
@@ -841,8 +850,8 @@ def test_resolved_revision_tolerates_raising_attribute_access() -> None:
 
 
 def test_resolved_revision_tolerates_a_broken_mapping_get() -> None:
-    class BrokenGetDict(dict):  # type: ignore[type-arg]
-        def get(self, key: object, default: object = None) -> object:
+    class BrokenGetDict(dict[str, object]):
+        def get(self, key: str, default: object = None) -> object:
             raise RuntimeError("broken mapping")
 
     model = SimpleNamespace(config=BrokenGetDict({"_commit_hash": "a" * 40}))
@@ -855,7 +864,9 @@ def test_cache_identity_float_values_must_be_finite() -> None:
     retriever = DenseRetriever(backend=backend)
 
     backend.cache_identity = 1.5
-    assert "cache_identity_sha256" in retriever.settings["backend"]
+    digest = retriever.settings["backend"]["cache_identity_sha256"]
+    backend.cache_identity = 2.5
+    assert retriever.settings["backend"]["cache_identity_sha256"] != digest
 
     backend.cache_identity = float("inf")
     with pytest.raises(RetrieverContractError, match="cache identity must be finite"):
@@ -876,7 +887,11 @@ def test_cache_identity_supports_sequences_and_rejects_other_types() -> None:
     retriever = DenseRetriever(backend=backend)
 
     backend.cache_identity = ["provider", 3]
-    assert "cache_identity_sha256" in retriever.settings["backend"]
+    digest = retriever.settings["backend"]["cache_identity_sha256"]
+    backend.cache_identity = ("provider", 3)
+    assert retriever.settings["backend"]["cache_identity_sha256"] == digest
+    backend.cache_identity = ["provider", 4]
+    assert retriever.settings["backend"]["cache_identity_sha256"] != digest
 
     backend.cache_identity = {"provider", "extra"}
     with pytest.raises(RetrieverContractError, match="must contain JSON values"):
