@@ -113,9 +113,10 @@ def test_application_services_are_available_from_the_package_root() -> None:
     assert evaluate_configured_quality_gates.__module__ == "retrieval_lab.application"
 
 
-def test_public_all_is_sorted_and_duplicate_free() -> None:
+def test_public_all_is_duplicate_free() -> None:
+    # Ordering inside __all__ is owned by ruff (RUF022); this test pins
+    # uniqueness, which lint cannot see.
     names = list(retrieval_lab.__all__)
-    assert names == sorted(names)
     assert len(names) == len(set(names))
 
 
@@ -179,6 +180,7 @@ def test_api_reference_descriptions_match_public_docstrings() -> None:
         "DatasetOrigin",
         "DatasetReviewStatus",
         "GenerateCallable",
+        "JudgeCallable",
         "RelevanceLevel",
         "SyntheticGenerateCallable",
     }

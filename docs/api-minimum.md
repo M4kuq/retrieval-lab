@@ -87,6 +87,13 @@ Answer generation:
 - `GenerationRequest`, `GenerationContext`, `GeneratedAnswer`, `GenerationOutput`
 - `generate_answer`
 
+LLM-as-judge (caller-controlled; the library ships no provider client):
+
+- `Judge`, `JudgeCallable`, `CallableJudge`, `MockJudge`
+- `JudgePromptTemplate`, `DEFAULT_JUDGE_PROMPT_TEMPLATE`
+- `JudgeRequest`, `JudgeVerdict`, `JudgeUsage`, `JudgeOutput`
+- `PanelJudgment`, `judge_answer`, `judge_answer_with_panel`
+
 Dataset authoring, inspection, and workflow:
 
 - `DatasetDraft`, `DraftQuery`, `DatasetOrigin`, `DatasetProvenance`,

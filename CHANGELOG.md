@@ -13,6 +13,12 @@ cut.
 
 ### Added
 
+- LLM-as-judge support: `judge_answer()` and `judge_answer_with_panel()`
+  run caller-controlled judges over generated answers with a validated
+  prompt template (`JudgePromptTemplate`, `DEFAULT_JUDGE_PROMPT_TEMPLATE`),
+  multi-judge panels (`PanelJudgment` with mean/spread and token/cost
+  totals), and per-judge usage recording (`JudgeUsage`). No provider
+  client is bundled; judges return typed `JudgeVerdict` records.
 - Comparison statistics: `bootstrap_metric_delta()` resamples the paired
   per-query deltas of a `MetricComparison` and returns a `BootstrapDelta`
   with a percentile bootstrap confidence interval, a two-sided bootstrap
