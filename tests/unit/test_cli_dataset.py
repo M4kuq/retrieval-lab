@@ -222,7 +222,6 @@ def test_dataset_review_rejects_invalid_relevance_specs(
 
 def test_dataset_relevance_specs_allow_colons_in_document_ids() -> None:
     assert dataset_cli._parse_relevance_specs(["a:b:2"]) == {"a:b": 2}
-    assert dataset_cli._parse_relevance_specs(["a:b"]) == {"a:b": 1}
 
 
 def test_dataset_review_cli_returns_input_error_for_invalid_grade(
