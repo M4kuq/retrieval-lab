@@ -764,6 +764,7 @@ def test_strict_field_missing_from_baseline_is_blocking() -> None:
     assert any(
         issue.field == "manifest.dataset_hash"
         and issue.reason == "missing from baseline"
+        and issue.blocking
         for issue in report.issues
     )
 
@@ -787,16 +788,18 @@ def test_malformed_query_ids_are_missing_or_invalid(
     assert any(
         issue.field == "manifest.query_ids"
         and issue.reason == "missing or invalid in baseline"
+        and issue.blocking
         for issue in report.issues
     )
     assert any(
         issue.field == "manifest.query_ids"
         and issue.reason == "missing or invalid in candidate"
+        and issue.blocking
         for issue in report.issues
     )
 
 
-@pytest.mark.parametrize("top_k", [3, [1, 0], [1, True], [1, 1]])
+@pytest.mark.parametrize("top_k", [3, [1, 0], [True, 3], [1, 1]])
 def test_malformed_top_k_is_invalid_in_baseline(top_k: object) -> None:
     baseline = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"top_k": top_k})
     candidate = _result({"bm25": (0.2, 0.4, 0.6)}, manifest={"top_k": top_k})
@@ -804,7 +807,9 @@ def test_malformed_top_k_is_invalid_in_baseline(top_k: object) -> None:
     report = check_comparability(baseline, candidate)
 
     assert any(
-        issue.field == "manifest.top_k" and issue.reason == "invalid in baseline"
+        issue.field == "manifest.top_k"
+        and issue.reason == "invalid in baseline"
+        and issue.blocking
         for issue in report.issues
     )
 
@@ -816,7 +821,9 @@ def test_invalid_candidate_top_k_is_blocking() -> None:
     report = check_comparability(baseline, candidate)
 
     assert any(
-        issue.field == "manifest.top_k" and issue.reason == "invalid in candidate"
+        issue.field == "manifest.top_k"
+        and issue.reason == "invalid in candidate"
+        and issue.blocking
         for issue in report.issues
     )
 
@@ -847,7 +854,9 @@ def test_top_k_values_differ_when_each_side_matches_its_own_cutoffs() -> None:
     report = check_comparability(baseline, candidate)
 
     assert any(
-        issue.field == "manifest.top_k" and issue.reason == "values differ"
+        issue.field == "manifest.top_k"
+        and issue.reason == "values differ"
+        and issue.blocking
         for issue in report.issues
     )
 
