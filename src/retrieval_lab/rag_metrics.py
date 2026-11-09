@@ -121,12 +121,7 @@ def evaluate_rag_answer(
 
     if not isinstance(query_id, str) or not query_id.strip():
         raise EvaluationError("query_id must be a non-empty string")
-    if claims is None:
-        raise EvaluationError("claims must be a sequence of ClaimAssessment values")
-    assessed = tuple(claims)
-    for position, item in enumerate(assessed):
-        if not isinstance(item, ClaimAssessment):
-            raise EvaluationError(f"claims[{position}] must be a ClaimAssessment")
+    assessed = _validated_claims(claims, allow_empty=True)
     return RagEvaluation(
         query_id=query_id,
         faithfulness=faithfulness(assessed) if assessed else None,
@@ -135,11 +130,13 @@ def evaluate_rag_answer(
     )
 
 
-def _validated_claims(claims: Sequence[ClaimAssessment]) -> tuple[ClaimAssessment, ...]:
+def _validated_claims(
+    claims: Sequence[ClaimAssessment], *, allow_empty: bool = False
+) -> tuple[ClaimAssessment, ...]:
     if isinstance(claims, (str, bytes)) or not isinstance(claims, Sequence):
         raise EvaluationError("claims must be a sequence of ClaimAssessment values")
     assessed = tuple(claims)
-    if not assessed:
+    if not assessed and not allow_empty:
         raise EvaluationError("at least one claim assessment is required")
     for position, item in enumerate(assessed):
         if not isinstance(item, ClaimAssessment):
@@ -164,12 +161,12 @@ def _validated_context(
         relevant_ids, Collection
     ):
         raise EvaluationError("relevant_ids must be a collection of document IDs")
+    for identifier in relevant_ids:
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise EvaluationError("relevant identifiers must be non-empty strings")
     relevant = frozenset(relevant_ids)
     if not relevant:
         raise EvaluationError("relevant identifiers must not be empty")
-    for identifier in relevant:
-        if not isinstance(identifier, str) or not identifier.strip():
-            raise EvaluationError("relevant identifiers must be non-empty strings")
     return context, relevant
 
 

@@ -121,3 +121,19 @@ def test_rag_evaluation_validates_scores_and_query() -> None:
             relevant_ids={"a"},
             claims=None,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize("claims", ["", b"", {}, 1])
+def test_evaluate_rag_answer_rejects_non_sequence_claims(claims: object) -> None:
+    with pytest.raises(EvaluationError):
+        evaluate_rag_answer(
+            "q",
+            context_ids=["a"],
+            relevant_ids={"a"},
+            claims=claims,  # type: ignore[arg-type]
+        )
+
+
+def test_context_metrics_reject_unhashable_relevant_ids() -> None:
+    with pytest.raises(EvaluationError):
+        context_recall(["a"], [["a"]])  # type: ignore[list-item]
