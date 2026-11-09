@@ -147,6 +147,81 @@ def test_load_beir_dataset_rejects_malformed_files(tmp_path: Path) -> None:
         load_beir_dataset(broken)
 
 
+def test_load_beir_dataset_duplicate_qrels_last_row_wins(tmp_path: Path) -> None:
+    corpus = [
+        {"_id": "d1", "text": "one"},
+        {"_id": "d2", "text": "two"},
+    ]
+    queries = [
+        {"_id": "q1", "text": "first"},
+        {"_id": "q2", "text": "second"},
+        {"_id": "q3", "text": "third"},
+    ]
+    qrels = (
+        "q1\td1\t2\n"
+        "q1\td1\t1\n"  # positive -> positive: grade overwritten
+        "q1\td2\t2\n"
+        "q1\td2\t0\n"  # positive -> zero: judgment removed
+        "q2\td1\t0\n"
+        "q2\td1\t2\n"  # zero -> positive: judgment added
+        "q3\td1\t1\n"
+        "q3\td1\t0\n"  # last positive removed: query excluded
+    )
+    root = _write_beir(tmp_path / "dups", corpus=corpus, queries=queries, qrels=qrels)
+    benchmark = load_beir_dataset(root)
+    assert benchmark.dataset.relevance_grades_by_query["q1"] == {"d1": 1}
+    assert benchmark.dataset.relevance_grades_by_query["q2"] == {"d1": 2}
+    assert benchmark.excluded_query_ids == ("q3",)
+
+
+def test_load_beir_dataset_headerless_query_named_query_id(tmp_path: Path) -> None:
+    root = _write_beir(
+        tmp_path / "headerless",
+        corpus=[{"_id": "d1", "text": "body"}],
+        queries=[{"_id": "query-id", "text": "question"}],
+        qrels="query-id\td1\t1\n",
+    )
+    benchmark = load_beir_dataset(root)
+    assert benchmark.dataset.queries[0].id == "query-id"
+    assert benchmark.excluded_query_ids == ()
+
+
+def test_load_beir_dataset_preserves_unicode_line_separators(tmp_path: Path) -> None:
+    root = tmp_path / "unicode"
+    (root / "qrels").mkdir(parents=True)
+    text = "first\u2028second\u0085third"
+    (root / "corpus.jsonl").write_text(
+        json.dumps({"_id": "d1", "text": text}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (root / "queries.jsonl").write_text(
+        json.dumps({"_id": "q1", "text": "question"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (root / "qrels" / "test.tsv").write_text("q1\td1\t1\n", encoding="utf-8")
+    benchmark = load_beir_dataset(root)
+    assert benchmark.documents[0].text == text
+
+
+def test_load_beir_dataset_rejects_invalid_utf8(tmp_path: Path) -> None:
+    root = tmp_path / "bad-utf8"
+    (root / "qrels").mkdir(parents=True)
+    (root / "corpus.jsonl").write_bytes(b'{"_id": "d1", "text": "\xff"}\n')
+    (root / "queries.jsonl").write_text(
+        '{"_id": "q1", "text": "q"}\n', encoding="utf-8"
+    )
+    (root / "qrels" / "test.tsv").write_text("q1\td1\t1\n", encoding="utf-8")
+    with pytest.raises(DatasetValidationError, match="not valid UTF-8"):
+        load_beir_dataset(root)
+
+    (root / "corpus.jsonl").write_text(
+        '{"_id": "d1", "text": "ok"}\n', encoding="utf-8"
+    )
+    (root / "qrels" / "test.tsv").write_bytes(b"q1\td1\t\xff\n")
+    with pytest.raises(DatasetValidationError, match="not valid UTF-8"):
+        load_beir_dataset(root)
+
+
 def test_load_beir_dataset_rejects_all_unjudged(tmp_path: Path) -> None:
     root = _write_beir(
         tmp_path / "no-positive",

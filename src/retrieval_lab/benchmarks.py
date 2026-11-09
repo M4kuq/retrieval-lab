@@ -175,19 +175,18 @@ def _load_beir_qrels(
     path: Path, *, query_ids: frozenset[str], document_ids: frozenset[str]
 ) -> dict[str, dict[str, int]]:
     grades: dict[str, dict[str, int]] = {}
-    for line_number, raw_line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    for line_number, raw_line in _iter_lines(path):
         if not raw_line.strip():
             continue
         columns = raw_line.split("\t")
-        if line_number == 1 and columns[0].strip() == "query-id":
+        stripped = tuple(column.strip() for column in columns)
+        if line_number == 1 and stripped == ("query-id", "corpus-id", "score"):
             continue
         if len(columns) != 3:
             raise _error(
                 path, line_number, "qrels rows must have exactly three TSV columns"
             )
-        query_id, document_id, score_text = (column.strip() for column in columns)
+        query_id, document_id, score_text = stripped
         if query_id not in query_ids:
             raise _error(
                 path, line_number, f"qrels reference unknown query {query_id!r}"
@@ -206,14 +205,15 @@ def _load_beir_qrels(
             raise _error(path, line_number, "qrels score must not be negative")
         if score > 0:
             grades.setdefault(query_id, {})[document_id] = score
-    return grades
+        elif query_id in grades:
+            # A later zero judgment overrides an earlier positive one.
+            grades[query_id].pop(document_id, None)
+    return {query_id: items for query_id, items in grades.items() if items}
 
 
 def _jsonl_records(path: Path) -> list[tuple[int, dict[str, object]]]:
     records: list[tuple[int, dict[str, object]]] = []
-    for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    for line_number, line in _iter_lines(path):
         if not line.strip():
             raise _error(path, line_number, "blank lines are not valid JSONL records")
         try:
@@ -224,6 +224,17 @@ def _jsonl_records(path: Path) -> list[tuple[int, dict[str, object]]]:
             raise _error(path, line_number, "JSONL records must be JSON objects")
         records.append((line_number, parsed))
     return records
+
+
+def _iter_lines(path: Path) -> list[tuple[int, str]]:
+    lines: list[tuple[int, str]] = []
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                lines.append((line_number, line.rstrip("\n")))
+    except UnicodeDecodeError:
+        raise _error(path, len(lines) + 1, "file is not valid UTF-8") from None
+    return lines
 
 
 def _record_id(record: dict[str, object], *, path: Path, line_number: int) -> str:
