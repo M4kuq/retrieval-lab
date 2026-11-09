@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -174,6 +175,53 @@ def test_checkpoint_recovers_a_torn_header(tmp_path: Path) -> None:
     foreign.write_bytes(b'{"format": "other-format", "vers')
     with pytest.raises(EvaluationError):
         EvaluationCheckpoint(foreign, fingerprint=FINGERPRINT)
+
+
+def test_failed_record_rolls_back_and_retry_on_same_instance_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "rollback.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    checkpoint.record(_result("q1"))
+    size_before = path.stat().st_size
+
+    real_fsync = os.fsync
+    state = {"fail": True}
+
+    def flaky_fsync(descriptor: int) -> None:
+        if state["fail"]:
+            state["fail"] = False
+            raise OSError("simulated fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", flaky_fsync)
+    with pytest.raises(EvaluationError):
+        checkpoint.record(_result("q2"))
+    assert path.stat().st_size == size_before
+
+    checkpoint.record(_result("q2"))
+    reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert reread.completed_query_ids == frozenset({"q1", "q2"})
+
+
+def test_unrecoverable_write_failure_poisons_the_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "poison.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+    def broken_fsync(descriptor: int) -> None:
+        raise OSError("simulated fsync failure")
+
+    def broken_truncate(self: EvaluationCheckpoint, size: int) -> None:
+        raise EvaluationError("simulated rollback failure")
+
+    monkeypatch.setattr(os, "fsync", broken_fsync)
+    monkeypatch.setattr(EvaluationCheckpoint, "_truncate", broken_truncate)
+    with pytest.raises(EvaluationError):
+        checkpoint.record(_result("q1"))
+    with pytest.raises(EvaluationError, match="unusable after a failed write"):
+        checkpoint.record(_result("q1"))
 
 
 def test_run_with_checkpoint_runs_only_missing_queries(tmp_path: Path) -> None:

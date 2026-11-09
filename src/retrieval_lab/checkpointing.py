@@ -63,6 +63,7 @@ class EvaluationCheckpoint:
         self._fingerprint = fingerprint
         self._results: list[RetrievedQueryResult] = []
         self._completed: set[str] = set()
+        self._broken = False
         try:
             exists = self._path.is_file() and self._path.stat().st_size > 0
         except OSError as error:
@@ -79,8 +80,7 @@ class EvaluationCheckpoint:
                     f"{self._path}: cannot create checkpoint directory: {error}"
                 ) from error
             self._write_line(self._header())
-            for directory in (self._path.parent, *self._path.parent.parents):
-                _sync_directory(directory)
+            self._sync_ancestors()
 
     @property
     def path(self) -> Path:
@@ -133,8 +133,21 @@ class EvaluationCheckpoint:
             "fingerprint": self._fingerprint,
         }
 
+    def _sync_ancestors(self) -> None:
+        for directory in (self._path.parent, *self._path.parent.parents):
+            _sync_directory(directory)
+
     def _write_line(self, payload: dict[str, object]) -> None:
+        if self._broken:
+            raise EvaluationError(
+                f"{self._path}: checkpoint is unusable after a failed write; "
+                "reopen the checkpoint file to recover"
+            )
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        try:
+            size_before = self._path.stat().st_size
+        except OSError:
+            size_before = None
         try:
             with self._path.open("a", encoding="utf-8") as handle:
                 if self._missing_trailing_newline():
@@ -147,6 +160,18 @@ class EvaluationCheckpoint:
                 handle.flush()
                 os.fsync(handle.fileno())
         except OSError as error:
+            # A failed append can leave a partial record behind. Roll
+            # the file back to its pre-write size so a retry on this
+            # instance — or a later reopen — never meets the fragment
+            # as a corrupt middle line; if even the rollback fails,
+            # refuse further writes on this instance.
+            try:
+                if size_before is None:
+                    self._path.unlink()
+                else:
+                    self._truncate(size_before)
+            except Exception:
+                self._broken = True
             raise EvaluationError(
                 f"{self._path}: cannot append to checkpoint file: {error}"
             ) from error
@@ -182,6 +207,7 @@ class EvaluationCheckpoint:
             # a strict prefix of it and no records; start the file over.
             self._truncate(0)
             self._write_line(self._header())
+            self._sync_ancestors()
             return
         pieces = raw.split(b"\n")
         offset = 0
