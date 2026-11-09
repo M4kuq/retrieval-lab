@@ -63,12 +63,24 @@ class EvaluationCheckpoint:
         self._fingerprint = fingerprint
         self._results: list[RetrievedQueryResult] = []
         self._completed: set[str] = set()
-        if self._path.is_file() and self._path.stat().st_size > 0:
+        try:
+            exists = self._path.is_file() and self._path.stat().st_size > 0
+        except OSError as error:
+            raise EvaluationError(
+                f"{self._path}: cannot inspect checkpoint file: {error}"
+            ) from error
+        if exists:
             self._load()
         else:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise EvaluationError(
+                    f"{self._path}: cannot create checkpoint directory: {error}"
+                ) from error
             self._write_line(self._header())
-            _sync_directory(self._path.parent)
+            for directory in (self._path.parent, *self._path.parent.parents):
+                _sync_directory(directory)
 
     @property
     def path(self) -> Path:
@@ -123,16 +135,21 @@ class EvaluationCheckpoint:
 
     def _write_line(self, payload: dict[str, object]) -> None:
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        with self._path.open("a", encoding="utf-8") as handle:
-            if self._missing_trailing_newline():
-                # A crash between writing a record's JSON body and its
-                # newline leaves a valid but unterminated final line;
-                # terminate it before appending or the two records
-                # would concatenate into one corrupt line.
-                handle.write("\n")
-            handle.write(line + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        try:
+            with self._path.open("a", encoding="utf-8") as handle:
+                if self._missing_trailing_newline():
+                    # A crash between writing a record's JSON body and
+                    # its newline leaves a valid but unterminated final
+                    # line; terminate it before appending or the two
+                    # records would concatenate into one corrupt line.
+                    handle.write("\n")
+                handle.write(line + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            raise EvaluationError(
+                f"{self._path}: cannot append to checkpoint file: {error}"
+            ) from error
 
     def _missing_trailing_newline(self) -> bool:
         try:
@@ -142,11 +159,31 @@ class EvaluationCheckpoint:
                     return False
                 handle.seek(-1, os.SEEK_END)
                 return handle.read(1) != b"\n"
-        except FileNotFoundError:
+        except OSError:
             return False
 
     def _load(self) -> None:
-        pieces = self._path.read_bytes().split(b"\n")
+        try:
+            raw = self._path.read_bytes()
+        except OSError as error:
+            raise EvaluationError(
+                f"{self._path}: cannot read checkpoint file: {error}"
+            ) from error
+        expected_header = json.dumps(
+            self._header(), ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")
+        if (
+            raw
+            and b"\n" not in raw
+            and len(raw) < len(expected_header)
+            and expected_header.startswith(raw)
+        ):
+            # A crash while the header itself was being written left
+            # a strict prefix of it and no records; start the file over.
+            self._truncate(0)
+            self._write_line(self._header())
+            return
+        pieces = raw.split(b"\n")
         offset = 0
         for line_number, piece in enumerate(pieces, start=1):
             is_last = line_number == len(pieces)
@@ -179,8 +216,13 @@ class EvaluationCheckpoint:
                 self._load_record(parsed, line_number)
 
     def _truncate(self, size: int) -> None:
-        with self._path.open("r+b") as handle:
-            handle.truncate(size)
+        try:
+            with self._path.open("r+b") as handle:
+                handle.truncate(size)
+        except OSError as error:
+            raise EvaluationError(
+                f"{self._path}: cannot repair checkpoint file: {error}"
+            ) from error
 
     def _validate_header(self, parsed: object) -> None:
         if not isinstance(parsed, dict) or parsed.get("format") != _FORMAT_NAME:

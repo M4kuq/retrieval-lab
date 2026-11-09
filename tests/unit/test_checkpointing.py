@@ -134,6 +134,48 @@ def test_checkpoint_rejects_non_integer_or_unknown_versions(
         EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
 
 
+def test_checkpoint_io_errors_become_evaluation_errors(tmp_path: Path) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, not a directory", encoding="utf-8")
+    with pytest.raises(EvaluationError):
+        EvaluationCheckpoint(blocker / "c.jsonl", fingerprint=FINGERPRINT)
+
+    directory = tmp_path / "a-directory"
+    directory.mkdir()
+    with pytest.raises(EvaluationError):
+        EvaluationCheckpoint(directory, fingerprint=FINGERPRINT)
+
+    path = tmp_path / "swapped.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    path.unlink()
+    path.mkdir()
+    with pytest.raises(EvaluationError):
+        checkpoint.record(_result("q1"))
+
+
+def test_checkpoint_recovers_a_torn_header(tmp_path: Path) -> None:
+    path = tmp_path / "torn-header.jsonl"
+    header = json.dumps(
+        {
+            "format": "retrieval-lab-evaluation-checkpoint",
+            "version": 1,
+            "fingerprint": FINGERPRINT,
+        },
+        sort_keys=True,
+    )
+    path.write_bytes(header.encode("utf-8")[:20])
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert len(checkpoint) == 0
+    checkpoint.record(_result("q1"))
+    reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert reread.completed_query_ids == frozenset({"q1"})
+
+    foreign = tmp_path / "foreign-prefix.jsonl"
+    foreign.write_bytes(b'{"format": "other-format", "vers')
+    with pytest.raises(EvaluationError):
+        EvaluationCheckpoint(foreign, fingerprint=FINGERPRINT)
+
+
 def test_run_with_checkpoint_runs_only_missing_queries(tmp_path: Path) -> None:
     path = tmp_path / "run.jsonl"
     queries = [_query("q1"), _query("q2"), _query("q3")]
