@@ -1,7 +1,7 @@
 """Unit tests for the deterministic BM25 retriever."""
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import cast
 
 import pytest
@@ -384,3 +384,83 @@ def test_reindex_replaces_state_and_preserves_result_fields_without_mutation() -
     assert result.metadata == {"chunk": "new"}
     assert result.score > 0.0
     assert result.rank == 1
+
+
+def test_constructor_rejects_k1_and_b_values_that_overflow_float() -> None:
+    with pytest.raises(
+        RetrieverContractError, match="k1 must be a finite number"
+    ) as k1_raised:
+        BM25Retriever(k1=10**400)
+    assert isinstance(k1_raised.value.__cause__, OverflowError)
+
+    with pytest.raises(
+        RetrieverContractError, match="b must be a finite number"
+    ) as b_raised:
+        BM25Retriever(b=10**400)
+    assert isinstance(b_raised.value.__cause__, OverflowError)
+
+
+def test_index_size_bytes_reflects_index_state() -> None:
+    retriever = BM25Retriever(tokenizer=lambda value: value.split())
+
+    assert retriever.index_size_bytes is None
+
+    retriever.index([])
+    assert retriever.index_size_bytes == 0
+
+    retriever.index([_chunk("a", "shared")])
+    assert retriever.index_size_bytes is not None
+    assert retriever.index_size_bytes > 0
+
+
+def _tokenizer_with_default(state: object) -> Callable[[str], list[str]]:
+    def tokenize(value: str, _state: object = state) -> list[str]:
+        return value.split()
+
+    return tokenize
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        1.5,
+        b"raw-bytes",
+        (1, "x"),
+        frozenset({1, 2}),
+        (lambda: 0).__code__,
+    ],
+    ids=["float", "bytes", "tuple", "frozenset", "code"],
+)
+def test_custom_tokenizer_identity_supports_immutable_default_state(
+    state: object,
+) -> None:
+    first = BM25Retriever(tokenizer=_tokenizer_with_default(state))
+    second = BM25Retriever(tokenizer=_tokenizer_with_default(state))
+
+    assert first.settings["tokenizer"] == second.settings["tokenizer"]
+    assert str(first.settings["tokenizer"]).startswith("custom:sha256:")
+
+
+def test_custom_tokenizer_identity_changes_with_default_state() -> None:
+    first = BM25Retriever(tokenizer=_tokenizer_with_default(1.5))
+    second = BM25Retriever(tokenizer=_tokenizer_with_default(2.5))
+
+    assert first.settings["tokenizer"] != second.settings["tokenizer"]
+
+
+@pytest.mark.parametrize(
+    ("state", "cause_type"),
+    [
+        (math.inf, ValueError),
+        (object(), TypeError),
+    ],
+    ids=["non-finite-float", "unsupported-object"],
+)
+def test_custom_tokenizer_identity_rejects_underivable_state(
+    state: object, cause_type: type[Exception]
+) -> None:
+    with pytest.raises(
+        RetrieverContractError, match="identity cannot be derived safely"
+    ) as raised:
+        BM25Retriever(tokenizer=_tokenizer_with_default(state))
+    assert isinstance(raised.value.__cause__, cause_type)
