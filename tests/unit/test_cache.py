@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -880,3 +880,282 @@ def test_runner_dense_cache_write_over_capacity_is_skipped(
     event = result.manifest["runtime"]["cache_events"][1]  # type: ignore[index,union-attr]
     assert event["status"] == "skipped"  # type: ignore[index]
     assert event["reason"] == "cache artifact exceeds configured capacity"  # type: ignore[index]
+
+
+def _tampered_chunk_read(
+    tmp_path: Path, mutate: Callable[[dict[str, object]], None]
+) -> object:
+    path = write_chunk_artifact(tmp_path, "a" * 64, [_chunk()])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutate(payload)
+    path.write_bytes(canonical_json_bytes(payload) + b"\n")
+    return read_chunk_artifact(tmp_path, "a" * 64)
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "reason"),
+    [
+        ("artifact_type", "other", "unexpected chunk artifact type"),
+        ("chunk_hash", "b" * 64, "chunk hash mismatch"),
+        ("count", 5, "chunk count mismatch"),
+        ("chunks", {}, "chunks must be a list"),
+        ("chunks", ["x"], "chunks[0] must be an object"),
+    ],
+)
+def test_read_chunk_artifact_rejects_tampered_fields(
+    tmp_path: Path, key: str, value: object, reason: str
+) -> None:
+    result = _tampered_chunk_read(
+        tmp_path, lambda payload: payload.__setitem__(key, value)
+    )
+
+    assert result.status is CacheStatus.CORRUPT  # type: ignore[attr-defined]
+    assert result.reason == reason  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        (
+            lambda payload: payload["chunks"][0].pop("text"),
+            "chunks[0] has invalid fields",
+        ),
+        (
+            lambda payload: payload["chunks"][0].__setitem__("start_offset", "zero"),
+            "chunks[0] is invalid",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "chunks", [payload["chunks"][0], payload["chunks"][0]]
+            ),
+            "duplicate chunk id 'chunk'",
+        ),
+        (
+            lambda payload: payload["chunks"][0].__setitem__("text", "tampered text"),
+            "chunk content hash mismatch",
+        ),
+    ],
+)
+def test_read_chunk_artifact_rejects_tampered_chunk_records(
+    tmp_path: Path,
+    mutate: Callable[[dict[str, object]], None],
+    reason: str,
+) -> None:
+    result = _tampered_chunk_read(tmp_path, mutate)
+
+    assert result.status is CacheStatus.CORRUPT  # type: ignore[attr-defined]
+    assert result.reason == reason  # type: ignore[attr-defined]
+
+
+def test_read_chunk_artifact_rejects_non_object_root(tmp_path: Path) -> None:
+    path = chunk_path(tmp_path, "a" * 64)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"[1, 2]\n")
+
+    result = read_chunk_artifact(tmp_path, "a" * 64)
+
+    assert result.status is CacheStatus.CORRUPT
+    assert result.reason == "artifact root must be an object"
+
+
+def test_read_chunk_artifact_reports_oversized_artifact(tmp_path: Path) -> None:
+    write_chunk_artifact(tmp_path, "a" * 64, [_chunk()])
+
+    result = read_chunk_artifact(tmp_path, "a" * 64, max_bytes=8)
+
+    assert result.status is CacheStatus.CORRUPT
+    assert result.reason is not None
+    assert "exceeds max_bytes" in result.reason
+
+
+@pytest.mark.parametrize(
+    ("cache_dir", "expected"),
+    [
+        ("", "cache_dir must not be empty"),
+        ("   ", "cache_dir must not be empty"),
+        (b"bytes", "cache_dir must be a text path"),
+        (123, "cache_dir must be a valid path"),
+    ],
+)
+def test_write_chunk_artifact_rejects_invalid_cache_dir(
+    cache_dir: object, expected: str
+) -> None:
+    with pytest.raises(EvaluationError, match=expected):
+        write_chunk_artifact(cache_dir, "a" * 64, [_chunk()])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("max_bytes", [0, -1, True])
+def test_cache_artifact_rejects_invalid_max_bytes(
+    tmp_path: Path, max_bytes: object
+) -> None:
+    with pytest.raises(
+        EvaluationError, match="cache max_bytes must be a positive integer"
+    ):
+        write_chunk_artifact(
+            tmp_path,
+            "a" * 64,
+            [_chunk()],
+            max_bytes=max_bytes,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(
+        EvaluationError, match="cache max_bytes must be a positive integer"
+    ):
+        read_chunk_artifact(tmp_path, "a" * 64, max_bytes=max_bytes)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        (123, "chunks must be a sequence"),
+        ([object()], "chunks must contain only Chunk records"),
+    ],
+)
+def test_write_chunk_artifact_rejects_invalid_chunks(
+    tmp_path: Path, chunks: object, expected: str
+) -> None:
+    with pytest.raises(EvaluationError, match=expected):
+        write_chunk_artifact(tmp_path, "a" * 64, chunks)  # type: ignore[arg-type]
+
+
+def test_write_chunk_artifact_revalidates_chunk_metadata(tmp_path: Path) -> None:
+    chunk = _chunk()
+    object.__setattr__(chunk, "metadata", {"score": float("nan")})
+
+    with pytest.raises(EvaluationError, match="must not contain NaN or infinity"):
+        write_chunk_artifact(tmp_path, "a" * 64, [chunk])
+
+
+def test_write_chunk_artifact_rejects_unsupported_metadata_type(
+    tmp_path: Path,
+) -> None:
+    chunk = _chunk()
+    object.__setattr__(chunk, "metadata", {"callback": object()})
+
+    with pytest.raises(
+        EvaluationError, match="contains unsupported JSON value type object"
+    ):
+        write_chunk_artifact(tmp_path, "a" * 64, [chunk])
+
+
+def test_write_chunk_artifact_normalizes_tuple_metadata(tmp_path: Path) -> None:
+    chunk = _chunk()
+    object.__setattr__(chunk, "metadata", {"tags": ("a", "b")})
+
+    write_chunk_artifact(tmp_path, "a" * 64, [chunk])
+    result = read_chunk_artifact(tmp_path, "a" * 64)
+
+    assert result.status is CacheStatus.HIT
+    assert isinstance(result.payload, tuple)
+    assert result.payload[0].metadata == {"tags": ["a", "b"]}
+
+
+def test_write_chunk_artifact_rejects_unencodable_text(tmp_path: Path) -> None:
+    chunk = Chunk(
+        id="c",
+        document_id="d",
+        text="\ud800",
+        start_offset=0,
+        end_offset=1,
+        metadata={},
+    )
+
+    with pytest.raises(EvaluationError, match="cache artifact is not canonical JSON"):
+        write_chunk_artifact(tmp_path, "a" * 64, [chunk])
+
+    assert not chunk_path(tmp_path, "a" * 64).exists()
+
+
+def test_write_chunk_artifact_normalizes_float_metadata(tmp_path: Path) -> None:
+    chunk = _chunk()
+    object.__setattr__(chunk, "metadata", {"score": 1.5})
+
+    write_chunk_artifact(tmp_path, "a" * 64, [chunk])
+    result = read_chunk_artifact(tmp_path, "a" * 64)
+
+    assert result.status is CacheStatus.HIT
+    assert isinstance(result.payload, tuple)
+    assert result.payload[0].metadata == {"score": 1.5}
+
+
+def test_write_chunk_artifact_reports_replace_failure_and_cleans_up(
+    tmp_path: Path,
+) -> None:
+    destination = chunk_path(tmp_path, "a" * 64)
+    destination.mkdir(parents=True)
+
+    with pytest.raises(
+        EvaluationError, match="could not atomically write cache artifact"
+    ):
+        write_chunk_artifact(tmp_path, "a" * 64, [_chunk()])
+
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+@pytest.mark.parametrize("error", [OSError("denied"), FileNotFoundError("gone")])
+def test_write_chunk_artifact_ignores_temporary_cleanup_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: OSError
+) -> None:
+    destination = chunk_path(tmp_path, "a" * 64)
+    destination.mkdir(parents=True)
+
+    def failing_unlink(self: Path, missing_ok: bool = False) -> None:
+        raise error
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    with pytest.raises(
+        EvaluationError, match="could not atomically write cache artifact"
+    ):
+        write_chunk_artifact(tmp_path, "a" * 64, [_chunk()])
+
+
+def _dense_write_kwargs(tmp_path: Path) -> dict[str, object]:
+    return {
+        "cache_dir": tmp_path,
+        "index_hash": "a" * 64,
+        "chunk_hash": "b" * 64,
+        "retriever_identity": {"name": "dense"},
+        "chunks": [_chunk()],
+        "vectors": [[1.0, 0.0]],
+        "dimension": 2,
+        "model_id": "model",
+        "requested_revision": None,
+        "resolved_revision": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        ({"model_id": ""}, "model_id must be a non-empty string"),
+        ({"model_id": "   "}, "model_id must be a non-empty string"),
+        ({"requested_revision": 5}, "requested_revision must be a string or None"),
+        ({"resolved_revision": 5}, "resolved_revision must be a string or None"),
+        ({"chunks": [object()]}, "chunks must contain only Chunk records"),
+        ({"dimension": 0}, "dimension must be a positive integer"),
+        ({"dimension": True}, "dimension must be a positive integer"),
+        ({"vectors": []}, "vector count does not match chunk count"),
+        ({"vectors": [["x", 0.0]]}, "vectors must contain numeric values"),
+        ({"vectors": [[True, 0.0]]}, "vectors must contain numeric values"),
+    ],
+)
+def test_write_dense_index_artifact_rejects_invalid_inputs(
+    tmp_path: Path, override: dict[str, object], expected: str
+) -> None:
+    kwargs = _dense_write_kwargs(tmp_path)
+    kwargs.update(override)
+
+    with pytest.raises(EvaluationError, match=expected):
+        write_dense_index_artifact(**kwargs)  # type: ignore[arg-type]
+
+
+def test_write_dense_index_artifact_rejects_duplicate_chunk_ids(
+    tmp_path: Path,
+) -> None:
+    kwargs = _dense_write_kwargs(tmp_path)
+    kwargs["chunks"] = [_chunk(), _chunk()]
+    kwargs["vectors"] = [[1.0, 0.0], [1.0, 0.0]]
+
+    with pytest.raises(EvaluationError, match="chunks must have unique IDs"):
+        write_dense_index_artifact(**kwargs)  # type: ignore[arg-type]
