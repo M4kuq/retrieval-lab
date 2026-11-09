@@ -77,6 +77,26 @@ def test_latency_stats_supports_empty_samples_and_serialization() -> None:
         evaluation_module.__getattr__("not_an_evaluation_api")
 
 
+@pytest.mark.parametrize("values", ["1.0", 1.0, None])
+def test_from_samples_rejects_non_sequence_values(values: object) -> None:
+    with pytest.raises(EvaluationError, match="must be a sequence"):
+        LatencyStats.from_samples(values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("failure_count", [True, -1, 1.5, "1"])
+def test_from_samples_rejects_invalid_failure_count(
+    failure_count: object,
+) -> None:
+    with pytest.raises(EvaluationError, match="non-negative integer"):
+        LatencyStats.from_samples([1.0], failure_count=failure_count)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("sample", [True, "1.0", None])
+def test_from_samples_rejects_non_numeric_samples(sample: object) -> None:
+    with pytest.raises(EvaluationError, match="finite non-negative number"):
+        LatencyStats.from_samples([sample])  # type: ignore[list-item]
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
