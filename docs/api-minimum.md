@@ -81,6 +81,11 @@ Answer evaluation:
   `AnswerReference`
 - `evaluate_answer`, `evaluate_answers`, `exact_match`, `token_f1`
 
+RAG quality metrics (RAGAS-style formulas over caller-supplied judgments):
+
+- `faithfulness`, `context_precision`, `context_recall`
+- `ClaimAssessment`, `RagEvaluation`, `evaluate_rag_answer`
+
 Answer generation:
 
 - `Generator`, `GenerateCallable`, `CallableGenerator`, `MockGenerator`
