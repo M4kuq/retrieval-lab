@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import math
 from collections.abc import Iterator, Sequence
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
+import retrieval_lab.retrievers.callable as callable_module
 from retrieval_lab import (
     CallableRetriever,
     Document,
@@ -82,6 +85,8 @@ def test_retrieved_item_is_immutable_and_fully_validated() -> None:
         ({"id": "a", "parent_document_id": ""}, "parent_document_id"),
         ({"id": "a", "score": math.nan}, "score"),
         ({"id": "a", "score": math.inf}, "score"),
+        ({"id": "a", "score": True}, "score"),
+        ({"id": "a", "score": "high"}, "score"),
         ({"id": "a", "score": 10**10000}, "score"),
         ({"id": "a", "rank": 0}, "rank"),
         ({"id": "a", "rank": True}, "rank"),
@@ -590,6 +595,103 @@ def test_evaluate_retrievers_validates_protocol_without_leaking_property_errors(
             retrievers={"missing": MissingRetrieve()},  # type: ignore[dict-item]
             top_k=[1],
         )
+
+
+def test_evaluate_retrievers_wraps_item_validation_failures() -> None:
+    class RawRetriever:
+        name = "raw"
+
+        def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            return [RetrievedItem("dup"), RetrievedItem("dup")]
+
+    with pytest.raises(RetrieverContractError, match="failed for query") as raised:
+        evaluate_retrievers(
+            dataset=_chunk_dataset(),
+            retrievers={"raw": RawRetriever()},  # type: ignore[dict-item]
+            top_k=[2],
+        )
+    cause = raised.value.__cause__
+    assert isinstance(cause, RetrieverContractError)
+    assert "duplicate item IDs" in str(cause)
+
+
+def test_evaluate_retrievers_rejects_bad_keys_and_names() -> None:
+    retriever = CallableRetriever("x", lambda query, top_k: [])
+    for key in ("", "  "):
+        with pytest.raises(ConfigurationError, match="mapping keys"):
+            evaluate_retrievers(
+                dataset=_chunk_dataset(),
+                retrievers={key: retriever},
+                top_k=[1],
+            )
+
+    class NonCallableRetrieve:
+        name = "x"
+        retrieve = None
+
+    with pytest.raises(ConfigurationError, match="Retriever protocol"):
+        evaluate_retrievers(
+            dataset=_chunk_dataset(),
+            retrievers={"x": NonCallableRetrieve()},  # type: ignore[dict-item]
+            top_k=[1],
+        )
+
+    class BlankName:
+        name = ""
+
+        def retrieve(self, query: str, *, top_k: int) -> Sequence[RetrievedItem]:
+            return []
+
+    with pytest.raises(ConfigurationError, match="names must be non-empty"):
+        evaluate_retrievers(
+            dataset=_chunk_dataset(),
+            retrievers={"x": BlankName()},  # type: ignore[dict-item]
+            top_k=[1],
+        )
+
+
+def test_evaluate_retrievers_omits_latency_warnings_with_enough_samples() -> None:
+    dataset = EvaluationDataset(
+        queries=[
+            EvaluationQuery(
+                id=f"q-{index}",
+                query="query",
+                relevant_document_ids={"doc-a"},
+            )
+            for index in range(20)
+        ],
+        relevance_level="document",
+    )
+    result = evaluate_retrievers(
+        dataset=dataset,
+        retrievers={"x": CallableRetriever("x", lambda query, top_k: [])},
+        top_k=[1],
+    )
+    assert all(evaluation.warnings == () for evaluation in result.query_results["x"])
+
+
+def test_runtime_manifest_falls_back_without_package_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(
+        callable_module,
+        "importlib_metadata",
+        SimpleNamespace(
+            version=missing,
+            PackageNotFoundError=importlib.metadata.PackageNotFoundError,
+        ),
+    )
+    result = evaluate_retrievers(
+        dataset=_chunk_dataset(),
+        retrievers={"x": CallableRetriever("x", lambda query, top_k: [])},
+        top_k=[1],
+    )
+    runtime = result.manifest["runtime"]
+    assert isinstance(runtime, dict)
+    assert runtime["retrieval_lab_version"] == "0.1.0rc1"
 
 
 def test_public_imports_expose_callable_api() -> None:
