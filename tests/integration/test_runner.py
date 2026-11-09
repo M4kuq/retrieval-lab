@@ -20,6 +20,7 @@ from retrieval_lab import (
     EvaluationError,
     EvaluationQuery,
     EvaluationRunner,
+    FixedSizeChunker,
     HybridRetriever,
     KeywordRetriever,
     RetrieverContractError,
@@ -893,3 +894,298 @@ def test_runner_rejects_duplicate_retriever_names() -> None:
             queries=_valid_queries(),
             retrievers=[_CountingRetriever(), _CountingRetriever()],
         )
+
+
+class _ContractFailingIndexRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "contract-failing-index"
+
+    def index(self, chunks: Sequence[Chunk]) -> None:
+        raise RetrieverContractError("index contract failure")
+
+
+class _RuntimeFailingIndexRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "runtime-failing-index"
+
+    def index(self, chunks: Sequence[Chunk]) -> None:
+        raise RuntimeError("index exploded")
+
+
+class _EmptyChunker(FixedSizeChunker):
+    def chunk(self, documents: Sequence[Document]) -> list[Chunk]:
+        return []
+
+
+def test_runner_propagates_contract_error_from_indexing() -> None:
+    runner = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        retrievers=[_ContractFailingIndexRetriever()],
+    )
+
+    with pytest.raises(RetrieverContractError, match="index contract failure"):
+        runner.run()
+
+
+def test_runner_wraps_unexpected_indexing_error() -> None:
+    runner = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        retrievers=[_RuntimeFailingIndexRetriever()],
+    )
+
+    with pytest.raises(EvaluationError, match="failed during indexing") as captured:
+        runner.run()
+
+    assert isinstance(captured.value.__cause__, RuntimeError)
+
+
+def test_runner_rejects_when_chunking_produces_no_chunks() -> None:
+    runner = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        chunker=_EmptyChunker(),
+    )
+
+    with pytest.raises(
+        CorpusValidationError, match="chunking produced no evaluable chunks"
+    ):
+        runner.run()
+
+
+def test_runner_propagates_contract_error_from_index_size_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def probe(retriever: BaseRetriever) -> int | None:
+        raise RetrieverContractError("size contract failure")
+
+    monkeypatch.setattr(runner_module, "_index_size_bytes", probe)
+    runner = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        retrievers=[KeywordRetriever()],
+    )
+
+    with pytest.raises(RetrieverContractError, match="size contract failure"):
+        runner.run()
+
+
+@pytest.mark.parametrize("size", [-1, True, 2.5])
+def test_runner_rejects_invalid_index_size_from_probe(
+    monkeypatch: pytest.MonkeyPatch, size: object
+) -> None:
+    monkeypatch.setattr(runner_module, "_index_size_bytes", lambda retriever: size)
+    runner = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        retrievers=[KeywordRetriever()],
+    )
+
+    with pytest.raises(EvaluationError, match="reported an invalid index size"):
+        runner.run()
+
+
+class _ContractFailingSettingsRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "contract-failing-settings"
+
+    @property
+    def settings(self) -> dict[str, object]:  # type: ignore[override]
+        raise RetrieverContractError("settings contract failure")
+
+
+class _RuntimeFailingSettingsRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "runtime-failing-settings"
+
+    @property
+    def settings(self) -> dict[str, object]:  # type: ignore[override]
+        raise RuntimeError("settings exploded")
+
+
+class _RecursiveSettingsRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "recursive-settings"
+
+    @property
+    def settings(self) -> dict[str, object]:  # type: ignore[override]
+        value: dict[str, object] = {}
+        value["self"] = value
+        return value
+
+
+class _NonMappingSettingsRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "non-mapping-settings"
+
+    @property
+    def settings(self) -> list[str]:  # type: ignore[override]
+        return ["not", "a", "mapping"]
+
+
+class _NonFiniteSettingsRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "non-finite-settings"
+
+    @property
+    def settings(self) -> dict[str, object]:  # type: ignore[override]
+        return {"scores": [float("inf")]}
+
+
+class _UnsupportedSettingsRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "unsupported-settings"
+
+    @property
+    def settings(self) -> dict[str, object]:  # type: ignore[override]
+        return {"callback": object()}
+
+
+@pytest.mark.parametrize(
+    ("retriever", "expected"),
+    [
+        (_ContractFailingSettingsRetriever(), "settings contract failure"),
+        (_RuntimeFailingSettingsRetriever(), "settings could not be read"),
+        (_RecursiveSettingsRetriever(), "settings must be JSON-compatible"),
+        (_NonMappingSettingsRetriever(), "settings must be a mapping"),
+        (_NonFiniteSettingsRetriever(), "must not contain NaN or infinity"),
+        (_UnsupportedSettingsRetriever(), "contains unsupported JSON value type"),
+    ],
+)
+def test_runner_rejects_unusable_retriever_settings(
+    retriever: BaseRetriever, expected: str
+) -> None:
+    runner = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        retrievers=[retriever],
+    )
+
+    with pytest.raises(RetrieverContractError, match=expected):
+        runner.run()
+
+
+def test_runner_manifest_falls_back_when_package_metadata_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(name: str) -> str:
+        raise runner_module.importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(runner_module.importlib_metadata, "version", missing)
+    result = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        strategies=["keyword"],
+    ).run()
+
+    runtime = result.manifest["runtime"]
+    assert isinstance(runtime, dict)
+    assert runtime["retrieval_lab_version"] == "0.1.0rc1"
+
+
+def test_optional_dependency_versions_tolerates_missing_dense_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(name: str) -> str:
+        raise runner_module.importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(runner_module.importlib_metadata, "version", missing)
+
+    assert runner_module._optional_dependency_versions([DenseRetriever()]) == {}
+
+
+def test_index_size_bytes_is_none_for_unindexed_dense_retriever() -> None:
+    assert runner_module._index_size_bytes(DenseRetriever()) is None
+
+
+def _manifest_kwargs() -> dict[str, object]:
+    documents = _valid_documents()
+    chunker = FixedSizeChunker()
+    return {
+        "documents": documents,
+        "queries": _valid_queries(),
+        "chunks": chunker.chunk(documents),
+        "retrievers": [KeywordRetriever()],
+        "top_k": (1,),
+        "chunker": chunker,
+        "relevance_level": "document",
+        "relevance_grades_by_query": {"q-1": {"doc-1": 1}},
+    }
+
+
+def test_build_manifest_rejects_mismatched_chunk_hash() -> None:
+    kwargs = _manifest_kwargs()
+    kwargs["chunk_hash"] = "0" * 64
+
+    with pytest.raises(
+        EvaluationError, match="chunk hash changed while building the manifest"
+    ):
+        runner_module._build_manifest(**kwargs)  # type: ignore[arg-type]
+
+
+def test_build_manifest_without_runtime_has_no_runtime_section() -> None:
+    manifest, run_id = runner_module._build_manifest(**_manifest_kwargs())  # type: ignore[arg-type]
+
+    assert "runtime" not in manifest
+    assert len(run_id) == 64
+
+
+def test_runner_reports_chunk_cache_content_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_read(
+        cache_dir: Path, chunk_hash: str, *, max_bytes: int
+    ) -> runner_module.CacheRead:
+        return runner_module.CacheRead(
+            runner_module.CacheStatus.HIT,
+            payload=(
+                Chunk(
+                    id="other",
+                    document_id="doc-1",
+                    text="different",
+                    start_offset=0,
+                    end_offset=9,
+                    metadata={},
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(runner_module, "read_chunk_artifact", fake_read)
+    result = EvaluationRunner(
+        documents=_valid_documents(),
+        queries=_valid_queries(),
+        retrievers=[KeywordRetriever()],
+        cache_dir=tmp_path,
+    ).run()
+
+    runtime = result.manifest["runtime"]
+    assert isinstance(runtime, dict)
+    event = runtime["cache_events"][0]  # type: ignore[index]
+    assert event["status"] == "corrupt"  # type: ignore[index]
+    assert event["reason"] == "chunk content mismatch"  # type: ignore[index]
+
+
+def test_runner_propagates_chunk_cache_read_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_read(cache_dir: Path, chunk_hash: str, *, max_bytes: int) -> object:
+        raise RuntimeError("cache disk gone")
+
+    monkeypatch.setattr(runner_module, "read_chunk_artifact", fake_read)
+
+    with pytest.raises(RuntimeError, match="cache disk gone"):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            retrievers=[KeywordRetriever()],
+            cache_dir=tmp_path,
+        ).run()

@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 
+import retrieval_lab.runner as runner_module
 from retrieval_lab import (
     DenseRetriever,
     Document,
@@ -22,6 +23,7 @@ from retrieval_lab import (
 )
 from retrieval_lab.artifacts import cache as cache_module
 from retrieval_lab.artifacts.cache import (
+    CacheCapacityError,
     CacheStatus,
     canonical_json_bytes,
     chunk_path,
@@ -32,7 +34,7 @@ from retrieval_lab.artifacts.cache import (
     write_chunk_artifact,
     write_dense_index_artifact,
 )
-from retrieval_lab.exceptions import EvaluationError
+from retrieval_lab.exceptions import EvaluationError, RetrieverContractError
 from retrieval_lab.models import Chunk
 
 
@@ -797,3 +799,84 @@ def test_runtime_manifest_never_serializes_cache_path_or_environment_secret(
     assert "absolute-secret-cache-path" not in serialized
     assert "RETRIEVAL_LAB_TEST_SECRET" not in serialized
     assert "do-not-record-this-value" not in serialized
+
+
+class _FailingBackend(_Backend):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    def encode(
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int,
+    ) -> Sequence[Sequence[float]]:
+        raise self._error
+
+
+def test_runner_dense_cache_rebuild_propagates_wrapped_backend_failure(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RetrieverContractError, match="dense embedding backend failed"):
+        _experiment(tmp_path, _FailingBackend(RuntimeError("encode exploded")))
+
+
+def test_runner_dense_cache_rebuild_wraps_unexpected_export_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_export(self: DenseRetriever) -> object:
+        raise RuntimeError("export exploded")
+
+    monkeypatch.setattr(DenseRetriever, "_cache_export", broken_export)
+
+    with pytest.raises(EvaluationError, match="cache rebuild failed"):
+        _experiment(tmp_path, _Backend())
+
+
+def test_runner_dense_cache_rebuild_propagates_contract_error(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RetrieverContractError, match="backend contract failure"):
+        _experiment(
+            tmp_path,
+            _FailingBackend(RetrieverContractError("backend contract failure")),
+        )
+
+
+def test_runner_dense_cache_restore_failure_rebuilds_and_marks_event_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _experiment(tmp_path, _Backend())
+
+    def broken_restore(
+        self: DenseRetriever,
+        chunks: Sequence[Chunk],
+        vectors: object,
+        *,
+        resolved_revision: str | None,
+    ) -> None:
+        raise RuntimeError("restore exploded")
+
+    monkeypatch.setattr(DenseRetriever, "_cache_restore", broken_restore)
+    backend = _Backend()
+    result = _experiment(tmp_path, backend)
+
+    event = result.manifest["runtime"]["cache_events"][1]  # type: ignore[index,union-attr]
+    assert event["status"] == "corrupt"  # type: ignore[index]
+    assert event["reason"] == "restore exploded"  # type: ignore[index]
+    assert len(backend.calls) == 2
+
+
+def test_runner_dense_cache_write_over_capacity_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def over_capacity(*args: object, **kwargs: object) -> object:
+        raise CacheCapacityError("dense artifact too large")
+
+    monkeypatch.setattr(runner_module, "write_dense_index_artifact", over_capacity)
+    result = _experiment(tmp_path, _Backend())
+
+    event = result.manifest["runtime"]["cache_events"][1]  # type: ignore[index,union-attr]
+    assert event["status"] == "skipped"  # type: ignore[index]
+    assert event["reason"] == "cache artifact exceeds configured capacity"  # type: ignore[index]
