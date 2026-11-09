@@ -107,9 +107,7 @@ def test_every_export_is_importable_from_the_package_root() -> None:
 def test_package_root_exposes_no_undocumented_names() -> None:
     exposed = {name for name in dir(retrieval_lab) if not name.startswith("_")}
     submodules = {
-        name
-        for name in exposed
-        if isinstance(getattr(retrieval_lab, name), ModuleType)
+        name for name in exposed if isinstance(getattr(retrieval_lab, name), ModuleType)
     }
     assert exposed - submodules == set(retrieval_lab.__all__)
 
