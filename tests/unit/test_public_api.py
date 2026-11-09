@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -44,8 +45,7 @@ API_DOCUMENT = ROOT / "docs" / "api-minimum.md"
 API_REFERENCE = ROOT / "docs" / "api-reference.md"
 
 
-def _bullet_names(text: str) -> set[str]:
-    names: set[str] = set()
+def _bullet_lines(text: str) -> Iterator[str]:
     in_bullet = False
     for line in text.splitlines():
         if line.startswith("- "):
@@ -53,7 +53,13 @@ def _bullet_names(text: str) -> set[str]:
         elif line and not line[0].isspace():
             in_bullet = False
         if in_bullet:
-            names.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
+            yield line
+
+
+def _bullet_names(text: str) -> set[str]:
+    names: set[str] = set()
+    for line in _bullet_lines(text):
+        names.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
     return names
 
 
@@ -146,23 +152,19 @@ def test_api_reference_descriptions_match_public_docstrings() -> None:
     import retrieval_lab.metrics as metrics
 
     descriptions: dict[str, str] = {}
-    in_bullet = False
-    for line in API_REFERENCE.read_text(encoding="utf-8").splitlines():
-        if line.startswith("- "):
-            in_bullet = True
-        elif line and not line[0].isspace():
-            in_bullet = False
-        if in_bullet:
-            match = re.match(r"- `([A-Za-z_][A-Za-z0-9_]*)` — (.*)$", line)
-            if match:
-                descriptions[match.group(1)] = match.group(2)
+    for line in _bullet_lines(API_REFERENCE.read_text(encoding="utf-8")):
+        match = re.match(r"- `([A-Za-z_][A-Za-z0-9_]*)` — (.*)$", line)
+        if match:
+            descriptions[match.group(1)] = match.group(2)
 
     objects = {name: getattr(retrieval_lab, name) for name in retrieval_lab.__all__}
     objects.update({name: getattr(metrics, name) for name in metrics.__all__})
     assert set(descriptions) == set(objects)
+    skipped: set[str] = set()
     for name, description in descriptions.items():
         docstring = inspect.getdoc(objects[name])
         if docstring is None:
+            skipped.add(name)
             continue
         first_line = re.sub(
             r":(?:class|func|meth|mod|attr):`([^`]+)`",
@@ -170,6 +172,16 @@ def test_api_reference_descriptions_match_public_docstrings() -> None:
             docstring.splitlines()[0],
         ).replace("`", "")
         assert description == first_line, name
+    assert skipped == {
+        "AnswerFailureType",
+        "ConstraintType",
+        "DatasetInspectionCode",
+        "DatasetOrigin",
+        "DatasetReviewStatus",
+        "GenerateCallable",
+        "RelevanceLevel",
+        "SyntheticGenerateCallable",
+    }
 
 
 def test_distribution_is_typed() -> None:
