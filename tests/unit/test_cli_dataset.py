@@ -11,6 +11,7 @@ from retrieval_lab import (
     DraftQuery,
     load_dataset_draft,
 )
+from retrieval_lab.cli import dataset as dataset_cli
 from retrieval_lab.cli.app import main
 from retrieval_lab.cli.dataset import run_dataset_command
 
@@ -26,6 +27,21 @@ def _corpus(tmp_path: Path) -> Path:
     corpus.mkdir()
     (corpus / "doc-1.md").write_text("relevant content", encoding="utf-8")
     return corpus
+
+
+def _review_args(
+    bundle: Path, corpus: Path, relevant: list[str] | None
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        dataset_command="review",
+        bundle=bundle,
+        corpus=corpus,
+        query_id="q-1",
+        relevant=relevant,
+        complete_review=False,
+        notes=None,
+        json_output=False,
+    )
 
 
 def test_dataset_status_cli_emits_json(tmp_path: Path, capsys) -> None:
@@ -120,19 +136,6 @@ def test_dataset_status_cli_lists_pending_queries_in_text_output(
     assert "pending: q-1" in output
 
 
-def _review_args(bundle: Path, corpus: Path, relevant: object) -> argparse.Namespace:
-    return argparse.Namespace(
-        dataset_command="review",
-        bundle=bundle,
-        corpus=corpus,
-        query_id="q-1",
-        relevant=relevant,
-        complete_review=False,
-        notes=None,
-        json_output=False,
-    )
-
-
 def test_dataset_finalize_cli_succeeds_for_a_completed_draft(
     tmp_path: Path,
     capsys,
@@ -161,6 +164,8 @@ def test_dataset_finalize_cli_succeeds_for_a_completed_draft(
     assert status == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["pending_query_ids"] == []
+    assert payload["complete_query_count"] == 1
+    assert payload["review_status"] == "reviewed"
 
 
 def test_dataset_command_rejects_unknown_commands() -> None:
@@ -213,6 +218,11 @@ def test_dataset_review_rejects_invalid_relevance_specs(
 
     with pytest.raises(DatasetValidationError, match=re.escape(message)):
         run_dataset_command(_review_args(bundle, corpus, relevant))
+
+
+def test_dataset_relevance_specs_allow_colons_in_document_ids() -> None:
+    assert dataset_cli._parse_relevance_specs(["a:b:2"]) == {"a:b": 2}
+    assert dataset_cli._parse_relevance_specs(["a:b"]) == {"a:b": 1}
 
 
 def test_dataset_review_cli_returns_input_error_for_invalid_grade(
