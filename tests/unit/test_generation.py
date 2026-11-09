@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import pytest
 
@@ -203,3 +204,122 @@ def test_generation_output_validates_latency() -> None:
 
     with pytest.raises(EvaluationError, match="latency_ms"):
         GenerationOutput("mock", answer, -1.0)
+
+
+@pytest.mark.parametrize(
+    ("query_id", "query"),
+    [("", "query"), ("q-1", "  "), (123, "query")],
+)
+def test_generation_request_rejects_empty_identity_fields(
+    query_id: object, query: object
+) -> None:
+    with pytest.raises(EvaluationError, match="must be non-empty"):
+        GenerationRequest(query_id, query)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("contexts", ["passage: text", 123])
+def test_generation_request_rejects_non_sequence_contexts(contexts: object) -> None:
+    with pytest.raises(EvaluationError, match="contexts must be a sequence"):
+        GenerationRequest("q-1", "query", contexts)  # type: ignore[arg-type]
+
+
+def test_generation_request_rejects_non_context_entries() -> None:
+    with pytest.raises(
+        EvaluationError, match=r"contexts\[0\] must be GenerationContext"
+    ):
+        GenerationRequest("q-1", "query", [object()])  # type: ignore[list-item]
+
+
+def test_generated_answer_rejects_non_string_text() -> None:
+    with pytest.raises(EvaluationError, match="text must be a string"):
+        GeneratedAnswer(123)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("citation_ids", ["doc-1", 123])
+def test_generated_answer_rejects_non_sequence_citations(
+    citation_ids: object,
+) -> None:
+    with pytest.raises(EvaluationError, match="citation_ids must be a sequence"):
+        GeneratedAnswer("answer", citation_ids=citation_ids)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("citation_id", ["", "  ", 123])
+def test_generated_answer_rejects_empty_citations(citation_id: object) -> None:
+    with pytest.raises(EvaluationError, match=r"citation_ids\[0\] must be non-empty"):
+        GeneratedAnswer("answer", citation_ids=[citation_id])  # type: ignore[list-item]
+
+
+def test_generation_output_rejects_blank_generator() -> None:
+    with pytest.raises(EvaluationError, match="generator must be non-empty"):
+        GenerationOutput("  ", GeneratedAnswer("answer"), 0.0)
+
+
+def test_generation_output_rejects_non_answer_values() -> None:
+    with pytest.raises(EvaluationError, match="answer must be a GeneratedAnswer"):
+        GenerationOutput("mock", "answer", 0.0)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("latency_ms", [True, "1"])
+def test_generation_output_rejects_non_numeric_latency(latency_ms: object) -> None:
+    with pytest.raises(EvaluationError, match="latency_ms must be finite"):
+        GenerationOutput("mock", GeneratedAnswer("answer"), latency_ms)  # type: ignore[arg-type]
+
+
+def test_callable_generator_validates_name_and_callback() -> None:
+    def callback(request: GenerationRequest) -> GeneratedAnswer:
+        return GeneratedAnswer("answer")
+
+    with pytest.raises(EvaluationError, match="name must be a non-empty string"):
+        CallableGenerator("  ", callback)
+    with pytest.raises(EvaluationError, match="callback must be callable"):
+        CallableGenerator("callable", 123)  # type: ignore[arg-type]
+
+
+def test_mock_generator_validates_answer_and_name() -> None:
+    with pytest.raises(EvaluationError, match="answer must be a GeneratedAnswer"):
+        MockGenerator("answer")  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="name must be a non-empty string"):
+        MockGenerator(GeneratedAnswer("answer"), name="")
+
+
+def test_mock_generator_rejects_non_request_values() -> None:
+    generator = MockGenerator(GeneratedAnswer("answer"))
+
+    with pytest.raises(EvaluationError, match="request must be a GenerationRequest"):
+        generator.generate("not-a-request")  # type: ignore[arg-type]
+
+
+def test_generate_answer_rejects_non_request_values() -> None:
+    generator = MockGenerator(GeneratedAnswer("answer"))
+
+    with pytest.raises(EvaluationError, match="request must be a GenerationRequest"):
+        generate_answer(generator, "not-a-request")  # type: ignore[arg-type]
+
+
+def test_generate_answer_rejects_non_callable_clock() -> None:
+    generator = MockGenerator(GeneratedAnswer("answer"))
+
+    with pytest.raises(EvaluationError, match="clock must be callable"):
+        generate_answer(generator, _request(), clock=123)  # type: ignore[arg-type]
+
+
+def test_generate_answer_rejects_a_generator_without_generate() -> None:
+    generator = SimpleNamespace(name="attribute-only")
+
+    with pytest.raises(EvaluationError, match="must provide non-empty name"):
+        generate_answer(generator, _request())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "generator",
+    [
+        SimpleNamespace(name="  ", generate=lambda request: GeneratedAnswer("a")),
+        SimpleNamespace(name="gen", generate=123),
+        SimpleNamespace(name=123, generate=lambda request: GeneratedAnswer("a")),
+    ],
+)
+def test_generate_answer_rejects_invalid_generator_shapes(
+    generator: SimpleNamespace,
+) -> None:
+    with pytest.raises(EvaluationError, match="must provide non-empty name"):
+        generate_answer(generator, _request())  # type: ignore[arg-type]
