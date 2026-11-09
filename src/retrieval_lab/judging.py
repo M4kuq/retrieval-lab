@@ -353,8 +353,7 @@ def judge_answer_with_panel(
     if len(set(names)) != len(names):
         raise EvaluationError("judge names must be unique")
     outputs = tuple(
-        judge_answer(judge, request, template=template, clock=clock)
-        for judge in panel
+        judge_answer(judge, request, template=template, clock=clock) for judge in panel
     )
     return PanelJudgment(query_id=request.query_id, outputs=outputs)
 
@@ -378,9 +377,7 @@ def _judge_name(judge: Judge) -> str:
             "judge must provide non-empty name and callable judge()"
         ) from exc
     if not isinstance(name, str) or not name.strip() or not callable(method):
-        raise EvaluationError(
-            "judge must provide non-empty name and callable judge()"
-        )
+        raise EvaluationError("judge must provide non-empty name and callable judge()")
     return name
 
 

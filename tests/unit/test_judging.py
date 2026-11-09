@@ -245,6 +245,4 @@ def test_panel_judgment_rejects_inconsistent_records() -> None:
     with pytest.raises(EvaluationError):
         JudgeOutput(judge="", verdict=JudgeVerdict(0.5), latency_ms=0.0, prompt="p")
     with pytest.raises(EvaluationError):
-        JudgeOutput(
-            judge="j", verdict=JudgeVerdict(0.5), latency_ms=-1.0, prompt="p"
-        )
+        JudgeOutput(judge="j", verdict=JudgeVerdict(0.5), latency_ms=-1.0, prompt="p")
