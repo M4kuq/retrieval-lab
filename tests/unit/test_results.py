@@ -945,14 +945,14 @@ def test_query_evaluation_serializes_warnings_without_latency() -> None:
 def test_result_rejects_invalid_latency_and_query_results(case: str) -> None:
     expected_by_case = {
         "both-latency-keys": "provide only one of latency or latency_stats",
-        "empty-latency": "EvaluationResult.latency must not be empty",
+        "empty-latency": r"EvaluationResult\.latency must not be empty",
         "latency-wrong-type": (
             r"EvaluationResult\.latency\['keyword'\] must be LatencyStats"
         ),
         "latency-retriever-mismatch": (
             "EvaluationResult latency and metrics must contain the same retriever names"
         ),
-        "empty-query-results": "EvaluationResult.query_results must not be empty",
+        "empty-query-results": (r"EvaluationResult\.query_results must not be empty"),
         "query-results-not-sequence": (
             r"EvaluationResult\.query_results\['keyword'\] must be a sequence"
         ),
@@ -1000,6 +1000,7 @@ def test_result_latency_stats_alias_returns_latency() -> None:
     ],
 )
 def test_result_rejects_invalid_quality_gates(case: str) -> None:
+    invalid_metric = "EvaluationResult quality gate metric is invalid"
     expected_by_case = {
         "gates-not-sequence": (r"EvaluationResult\.quality_gates must be a sequence"),
         "gates-wrong-item-type": (
@@ -1018,14 +1019,12 @@ def test_result_rejects_invalid_quality_gates(case: str) -> None:
         "unavailable-latency": (
             "EvaluationResult quality gate references unavailable latency"
         ),
-        "metric-unknown-name": "EvaluationResult quality gate metric is invalid",
-        "metric-empty-name": "EvaluationResult quality gate metric is invalid",
-        "metric-non-digit-cutoff": ("EvaluationResult quality gate metric is invalid"),
-        "metric-leading-zero-cutoff": (
-            "EvaluationResult quality gate metric is invalid"
-        ),
-        "metric-zero-cutoff": "EvaluationResult quality gate metric is invalid",
-        "metric-overflow-cutoff": ("EvaluationResult quality gate metric is invalid"),
+        "metric-unknown-name": invalid_metric,
+        "metric-empty-name": invalid_metric,
+        "metric-non-digit-cutoff": invalid_metric,
+        "metric-leading-zero-cutoff": invalid_metric,
+        "metric-zero-cutoff": invalid_metric,
+        "metric-overflow-cutoff": invalid_metric,
     }
     gates_factories: dict[str, Callable[[], object]] = {
         "gates-not-sequence": lambda: "keyword",
