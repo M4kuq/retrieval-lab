@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -1067,7 +1068,156 @@ def compare_runs(
     )
 
 
+@dataclass(frozen=True)
+class BootstrapDelta:
+    """Bootstrap confidence interval and significance for one metric delta."""
+
+    retriever: str
+    metric: str
+    cutoff: int | None
+    direction: MetricDirection
+    query_count: int
+    observed_delta: float
+    ci_lower: float
+    ci_upper: float
+    confidence_level: float
+    resamples: int
+    seed: int
+    p_value: float
+    significant: bool
+
+    def __post_init__(self) -> None:
+        for field_name in ("retriever", "metric"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise EvaluationError(f"BootstrapDelta.{field_name} must be non-empty")
+        if self.cutoff is not None and (
+            isinstance(self.cutoff, bool)
+            or not isinstance(self.cutoff, int)
+            or self.cutoff <= 0
+        ):
+            raise EvaluationError("BootstrapDelta.cutoff must be positive or None")
+        if self.direction not in ("higher_is_better", "lower_is_better"):
+            raise EvaluationError("BootstrapDelta.direction is invalid")
+        if (
+            isinstance(self.query_count, bool)
+            or not isinstance(self.query_count, int)
+            or self.query_count <= 0
+        ):
+            raise EvaluationError("BootstrapDelta.query_count must be positive")
+        if (
+            isinstance(self.resamples, bool)
+            or not isinstance(self.resamples, int)
+            or self.resamples <= 0
+        ):
+            raise EvaluationError("BootstrapDelta.resamples must be positive")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int):
+            raise EvaluationError("BootstrapDelta.seed must be an integer")
+        for field_name in (
+            "observed_delta",
+            "ci_lower",
+            "ci_upper",
+            "confidence_level",
+            "p_value",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _finite(getattr(self, field_name), f"BootstrapDelta.{field_name}"),
+            )
+        if not 0.0 < self.confidence_level < 1.0:
+            raise EvaluationError(
+                "BootstrapDelta.confidence_level must be between 0 and 1"
+            )
+        if self.ci_lower > self.ci_upper:
+            raise EvaluationError("BootstrapDelta confidence interval is inverted")
+        if not 0.0 <= self.p_value <= 1.0:
+            raise EvaluationError("BootstrapDelta.p_value must be between 0 and 1")
+        if not isinstance(self.significant, bool):
+            raise EvaluationError("BootstrapDelta.significant must be boolean")
+        if self.significant != (self.ci_lower > 0.0 or self.ci_upper < 0.0):
+            raise EvaluationError("BootstrapDelta.significant is inconsistent")
+
+
+def bootstrap_metric_delta(
+    comparison: MetricComparison,
+    *,
+    resamples: int = 1000,
+    confidence_level: float = 0.95,
+    seed: int = 42,
+) -> BootstrapDelta:
+    """Resample per-query deltas for a confidence interval and p-value.
+
+    The paired per-query absolute deltas stored on ``comparison`` are
+    resampled with replacement ``resamples`` times using a seeded
+    generator, so repeated calls with the same arguments are
+    deterministic. The interval is the percentile bootstrap interval at
+    ``confidence_level`` (linear interpolation between resample means),
+    and ``p_value`` is the two-sided bootstrap estimate: twice the
+    smaller share of resample means on either side of zero, capped at
+    one. ``significant`` is true exactly when the interval excludes
+    zero; whether that is an improvement depends on the metric
+    direction recorded on the result.
+    """
+
+    if not isinstance(comparison, MetricComparison):
+        raise EvaluationError("comparison must be a MetricComparison")
+    if isinstance(resamples, bool) or not isinstance(resamples, int) or resamples <= 0:
+        raise EvaluationError("resamples must be a positive integer")
+    if (
+        isinstance(confidence_level, bool)
+        or not isinstance(confidence_level, (int, float))
+        or not 0.0 < float(confidence_level) < 1.0
+    ):
+        raise EvaluationError("confidence_level must be between 0 and 1")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise EvaluationError("seed must be an integer")
+    deltas = tuple(delta.absolute_delta for delta in comparison.query_deltas)
+    if not deltas:
+        raise EvaluationError(
+            "bootstrap requires per-query deltas on the metric comparison"
+        )
+    observed = math.fsum(deltas) / len(deltas)
+    rng = random.Random(seed)
+    means = sorted(
+        math.fsum(rng.choices(deltas, k=len(deltas))) / len(deltas)
+        for _ in range(resamples)
+    )
+    tail = (1.0 - float(confidence_level)) / 2.0
+    ci_lower = _percentile(means, tail)
+    ci_upper = _percentile(means, 1.0 - tail)
+    below = sum(1 for mean in means if mean <= 0.0) / resamples
+    above = sum(1 for mean in means if mean >= 0.0) / resamples
+    p_value = min(1.0, 2.0 * min(below, above))
+    return BootstrapDelta(
+        retriever=comparison.retriever,
+        metric=comparison.metric,
+        cutoff=comparison.cutoff,
+        direction=comparison.aggregate.direction,
+        query_count=len(deltas),
+        observed_delta=observed,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        confidence_level=float(confidence_level),
+        resamples=resamples,
+        seed=seed,
+        p_value=p_value,
+        significant=ci_lower > 0.0 or ci_upper < 0.0,
+    )
+
+
+def _percentile(sorted_values: Sequence[float], quantile: float) -> float:
+    position = quantile * (len(sorted_values) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return sorted_values[int(position)]
+    fraction = position - lower
+    return sorted_values[lower] * (1.0 - fraction) + sorted_values[upper] * fraction
+
+
 __all__ = [
+    "BootstrapDelta",
     "ComparabilityIssue",
     "ComparabilityReport",
     "ComparisonTolerance",
@@ -1075,6 +1225,7 @@ __all__ = [
     "MetricDelta",
     "QueryDeltaExtreme",
     "RunComparison",
+    "bootstrap_metric_delta",
     "check_comparability",
     "compare_runs",
 ]

@@ -58,6 +58,7 @@ Comparison:
 
 - `ComparisonTolerance`, `ComparabilityIssue`, `ComparabilityReport`
 - `MetricDelta`, `MetricComparison`, `QueryDeltaExtreme`, `RunComparison`
+- `BootstrapDelta`, `bootstrap_metric_delta`
 - `check_comparability`, `compare_runs`
 
 Quality gates:

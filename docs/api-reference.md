@@ -89,8 +89,10 @@ Typed records behind the schema-versioned YAML configuration.
 - `MetricComparison` — Aggregate metric delta and deterministic per-query evidence.
 - `QueryDeltaExtreme` — Best or worst query-level change for one metric.
 - `RunComparison` — Deterministic comparison for the common retrievers in two runs.
+- `BootstrapDelta` — Bootstrap confidence interval and significance for one metric delta.
 - `check_comparability` — Diagnose whether two results satisfy all strict comparison contracts.
 - `compare_runs` — Compare two compatible results and return deterministic metric deltas.
+- `bootstrap_metric_delta` — Resample per-query deltas for a confidence interval and p-value.
 
 ## Quality gates
 
