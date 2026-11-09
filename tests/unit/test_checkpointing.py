@@ -269,6 +269,34 @@ def test_unrecoverable_write_failure_poisons_the_instance(
         checkpoint.record(_result("q1"))
 
 
+def test_separator_probe_failure_aborts_the_append_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "probe.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    checkpoint.record(_result("q1"))
+    content_before = path.read_bytes()
+
+    real_probe = EvaluationCheckpoint._missing_trailing_newline
+    state = {"fail": True}
+
+    def flaky_probe(self: EvaluationCheckpoint) -> bool:
+        if state["fail"]:
+            state["fail"] = False
+            raise PermissionError("simulated probe failure")
+        return real_probe(self)
+
+    monkeypatch.setattr(EvaluationCheckpoint, "_missing_trailing_newline", flaky_probe)
+    with pytest.raises(EvaluationError) as excinfo:
+        checkpoint.record(_result("q2"))
+    assert isinstance(excinfo.value.__cause__, OSError)
+    assert path.read_bytes() == content_before
+
+    checkpoint.record(_result("q2"))
+    reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert reread.completed_query_ids == frozenset({"q1", "q2"})
+
+
 def test_run_with_checkpoint_runs_only_missing_queries(tmp_path: Path) -> None:
     path = tmp_path / "run.jsonl"
     queries = [_query("q1"), _query("q2"), _query("q3")]
