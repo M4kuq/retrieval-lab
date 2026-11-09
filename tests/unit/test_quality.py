@@ -518,6 +518,10 @@ def test_quality_gate_models_reject_nonfinite_and_internal_contradictions() -> N
 @pytest.mark.parametrize(
     "changes",
     [
+        {"retriever": "  "},
+        {"actual": "high"},
+        {"threshold": True},
+        {"constraint": "max_relative_drop", "actual": None},
         {"constraint": "invalid"},
         {"actual": None},
         {
@@ -604,3 +608,20 @@ def test_quality_gate_result_and_report_reject_invalid_nested_contracts() -> Non
         QualityGateReport("other", None, (valid,))
     with pytest.raises(EvaluationError):
         QualityGateReport("candidate", "baseline", (valid,))
+    duplicate = QualityGateResult(
+        "bm25", "recall@1", (check,), True, "candidate", gate_index=0
+    )
+    with pytest.raises(EvaluationError, match="duplicate gate indexes"):
+        QualityGateReport("candidate", None, (valid, duplicate))
+
+
+def test_quality_gate_report_to_json_wraps_unserializable_state() -> None:
+    report = QualityGateReport(
+        candidate_run_id="candidate", baseline_run_id=None, results=()
+    )
+    object.__setattr__(report, "candidate_run_id", object())
+
+    with pytest.raises(EvaluationError, match="could not be serialized") as exc_info:
+        report.to_json()
+
+    assert isinstance(exc_info.value.__cause__, TypeError)
