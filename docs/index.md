@@ -12,6 +12,8 @@ feature and can use an injected local embedding backend.
 
 - Follow the [offline tutorial](https://github.com/M4kuq/retrieval-lab/blob/main/docs/tutorial.md) for a complete local evaluation.
 - Read the [minimum API](https://github.com/M4kuq/retrieval-lab/blob/main/docs/api-minimum.md) for typed Python contracts.
+- Browse the [API reference](https://github.com/M4kuq/retrieval-lab/blob/main/docs/api-reference.md) for every public name, grouped by task.
+- Run the [Python quickstart example](https://github.com/M4kuq/retrieval-lab/blob/main/examples/api_quickstart.py) against the bundled Japanese sample corpus.
 - Use the [CI regression guide](https://github.com/M4kuq/retrieval-lab/blob/main/docs/ci-regression.md) for saved-run quality gates.
 - Check the [FAQ](https://github.com/M4kuq/retrieval-lab/blob/main/docs/faq.md) for relevance, latency, and optional Dense behavior.
 
@@ -35,6 +37,32 @@ retrieval-lab init ./my-evaluation
 retrieval-lab validate --config ./my-evaluation/retrieval-lab.yaml
 retrieval-lab run --config ./my-evaluation/retrieval-lab.yaml
 ```
+
+## First Python run
+
+```python
+from retrieval_lab import Document, EvaluationQuery, EvaluationRunner
+
+result = EvaluationRunner.quick_evaluate(
+    documents=[Document(id="doc-1", text="Retrieval quality matters.")],
+    queries=[
+        EvaluationQuery(
+            id="q-1",
+            query="retrieval",
+            relevant_document_ids={"doc-1"},
+        )
+    ],
+    strategies=("keyword", "bm25"),
+    top_k=(1,),
+)
+
+print(result.metrics["bm25"].recall_at(1))
+```
+
+`result.metrics` is keyed by strategy name, and `recall_at(k)` returns the
+macro-averaged Recall@k for a cutoff that was evaluated (it raises `KeyError`
+for any other cutoff). The [API reference](https://github.com/M4kuq/retrieval-lab/blob/main/docs/api-reference.md#runner-and-result-loading)
+covers the runner and result contracts in detail.
 
 The [tutorial](https://github.com/M4kuq/retrieval-lab/blob/main/docs/tutorial.md),
 [FAQ](https://github.com/M4kuq/retrieval-lab/blob/main/docs/faq.md),
