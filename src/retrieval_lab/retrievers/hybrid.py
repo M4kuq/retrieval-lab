@@ -144,6 +144,9 @@ class HybridRetriever(BaseRetriever):
 
         indexed = _validate_shared_chunks(chunks)
         if self._indexed and self._indexed_chunks == indexed:
+            # Already indexed with these chunks: still record the sources so
+            # the caller does not index them again on its own.
+            indexed_retriever_ids.update(id(source) for source in self._sources)
             return
         self._indexed = False
         for source in self._sources:

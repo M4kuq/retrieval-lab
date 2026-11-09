@@ -245,3 +245,310 @@ def test_settings_reject_non_json_source_settings() -> None:
     )
     with pytest.raises(RetrieverContractError, match="unsupported JSON"):
         _ = retriever.settings
+
+
+class _CountingRetriever(_FakeRetriever):
+    def __init__(
+        self,
+        strategy_name: str,
+        results: Sequence[SearchResult] = (),
+    ) -> None:
+        super().__init__(strategy_name, results)
+        self.index_calls = 0
+
+    def index(self, chunks: Sequence[Chunk]) -> None:
+        self.index_calls += 1
+        super().index(chunks)
+
+
+class _RaisingNameRetriever(_FakeRetriever):
+    @property
+    def name(self) -> str:
+        raise RuntimeError("name unavailable")
+
+
+class _RaisingSettingsRetriever(_FakeRetriever):
+    def __init__(self, strategy_name: str, error: Exception) -> None:
+        super().__init__(strategy_name)
+        self._error = error
+
+    @property
+    def settings(self) -> Mapping[str, object]:
+        raise self._error
+
+
+class _StaticSettingsRetriever(_FakeRetriever):
+    def __init__(self, strategy_name: str, settings: object) -> None:
+        super().__init__(strategy_name)
+        self._static_settings = settings
+
+    @property
+    def settings(self) -> Mapping[str, object]:
+        return cast("Mapping[str, object]", self._static_settings)
+
+
+class _ExplodingMapping(Mapping):
+    def __getitem__(self, key: str) -> object:
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self) -> int:
+        return 0
+
+    def keys(self):
+        raise RuntimeError("keys unavailable")
+
+
+class _RawSearchRetriever(_FakeRetriever):
+    def __init__(self, strategy_name: str, raw: object) -> None:
+        super().__init__(strategy_name)
+        self._raw = raw
+
+    def search(self, query: str, top_k: int) -> list[SearchResult]:
+        return cast("list[SearchResult]", self._raw)
+
+
+class _RaisingSearchRetriever(_FakeRetriever):
+    def search(self, query: str, top_k: int) -> list[SearchResult]:
+        raise RuntimeError("backend down")
+
+
+def test_constructor_wraps_source_name_failures() -> None:
+    with pytest.raises(
+        RetrieverContractError, match="could not provide a name"
+    ) as captured:
+        HybridRetriever([_RaisingNameRetriever("broken"), _FakeRetriever("second")])
+
+    assert isinstance(captured.value.__cause__, RuntimeError)
+
+
+def test_settings_wrap_unreadable_source_settings() -> None:
+    retriever = HybridRetriever(
+        [
+            _RaisingSettingsRetriever("first", RuntimeError("io failed")),
+            _FakeRetriever("second"),
+        ]
+    )
+
+    with pytest.raises(
+        RetrieverContractError, match="settings could not be read"
+    ) as captured:
+        _ = retriever.settings
+
+    assert isinstance(captured.value.__cause__, RuntimeError)
+
+
+def test_settings_propagate_retrieval_lab_errors_from_sources() -> None:
+    retriever = HybridRetriever(
+        [
+            _RaisingSettingsRetriever(
+                "first", RetrieverContractError("source settings failed")
+            ),
+            _FakeRetriever("second"),
+        ]
+    )
+
+    with pytest.raises(RetrieverContractError, match=r"^source settings failed$"):
+        _ = retriever.settings
+
+
+def test_settings_wrap_mapping_failures_during_normalization() -> None:
+    retriever = HybridRetriever(
+        [
+            _StaticSettingsRetriever("first", _ExplodingMapping()),
+            _FakeRetriever("second"),
+        ]
+    )
+
+    with pytest.raises(
+        RetrieverContractError, match="settings must be JSON-compatible"
+    ) as captured:
+        _ = retriever.settings
+
+    assert isinstance(captured.value.__cause__, RuntimeError)
+
+
+def test_settings_reject_non_mapping_source_settings() -> None:
+    retriever = HybridRetriever(
+        [
+            _StaticSettingsRetriever("first", ["not", "a", "mapping"]),
+            _FakeRetriever("second"),
+        ]
+    )
+
+    with pytest.raises(RetrieverContractError, match="settings must be a mapping"):
+        _ = retriever.settings
+
+
+def test_settings_reject_non_string_keys() -> None:
+    retriever = HybridRetriever(
+        [
+            _StaticSettingsRetriever("first", {1: "value"}),
+            _FakeRetriever("second"),
+        ]
+    )
+
+    with pytest.raises(RetrieverContractError, match="keys must be strings"):
+        _ = retriever.settings
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_settings_reject_non_finite_numbers(value: float) -> None:
+    retriever = HybridRetriever(
+        [
+            _StaticSettingsRetriever("first", {"score": value}),
+            _FakeRetriever("second"),
+        ]
+    )
+
+    with pytest.raises(RetrieverContractError, match="NaN or infinity"):
+        _ = retriever.settings
+
+
+def test_settings_normalize_nested_lists_and_mappings() -> None:
+    retriever = HybridRetriever(
+        [
+            _StaticSettingsRetriever(
+                "first", {"tags": ["a", "b"], "nested": {"y": 2, "x": 1}}
+            ),
+            _FakeRetriever("second"),
+        ]
+    )
+
+    sources = retriever.settings["sources"]
+
+    assert isinstance(sources, list)
+    entry = sources[0]
+    assert isinstance(entry, dict)
+    settings = entry["settings"]
+    assert isinstance(settings, dict)
+    # Dict equality ignores order, so compare the key sequences explicitly:
+    # normalization must sort keys at every mapping level.
+    assert list(settings) == ["nested", "tags"]
+    assert settings["tags"] == ["a", "b"]
+    nested = settings["nested"]
+    assert isinstance(nested, dict)
+    assert list(nested) == ["x", "y"]
+    assert nested == {"x": 1, "y": 2}
+
+
+def test_reindexing_the_same_chunks_does_not_call_sources_again() -> None:
+    first = _CountingRetriever("first")
+    second = _CountingRetriever("second")
+    retriever = HybridRetriever([first, second])
+    chunks = [_chunk("a"), _chunk("b")]
+
+    retriever.index(chunks)
+    retriever.index(list(chunks))
+
+    assert first.index_calls == 1
+    assert second.index_calls == 1
+
+    retriever.index([_chunk("c")])
+
+    assert first.index_calls == 2
+    assert second.index_calls == 2
+
+
+def test_index_sources_once_records_and_skips_shared_sources() -> None:
+    first = _CountingRetriever("first")
+    second = _CountingRetriever("second")
+    retriever = HybridRetriever([first, second])
+    chunks = [_chunk("a")]
+    indexed_ids: set[int] = set()
+
+    retriever._index_sources_once(chunks, indexed_ids)
+
+    assert first.index_calls == 1
+    assert second.index_calls == 1
+    assert indexed_ids == {id(first), id(second)}
+
+    # A repeated call with the same chunks early-returns: no source is
+    # indexed again, but the source ids are still recorded for the new
+    # caller's set so it does not index them separately either.
+    second_pass: set[int] = set()
+    retriever._index_sources_once(chunks, second_pass)
+
+    assert first.index_calls == 1
+    assert second.index_calls == 1
+    assert second_pass == {id(first), id(second)}
+
+
+def test_index_sources_once_skips_sources_the_caller_already_indexed() -> None:
+    first = _CountingRetriever("first")
+    second = _CountingRetriever("second")
+    retriever = HybridRetriever([first, second])
+
+    retriever._index_sources_once([_chunk("a")], {id(first)})
+
+    assert first.index_calls == 0
+    assert second.index_calls == 1
+
+
+@pytest.mark.parametrize("top_k", [0, -3, True, 2.5])
+def test_search_rejects_invalid_top_k(top_k: object) -> None:
+    retriever = HybridRetriever([_FakeRetriever("first"), _FakeRetriever("second")])
+    retriever.index([_chunk("a")])
+
+    with pytest.raises(RetrieverContractError, match="top_k must be a positive"):
+        retriever.search("query", top_k)  # type: ignore[arg-type]
+
+
+def test_search_rejects_non_sequence_source_ranking() -> None:
+    retriever = HybridRetriever(
+        [_RawSearchRetriever("first", "rankings"), _FakeRetriever("second")]
+    )
+    retriever.index([_chunk("a")])
+
+    with pytest.raises(RetrieverContractError, match="must return a sequence"):
+        retriever.search("query", top_k=1)
+
+
+def test_search_rejects_non_result_source_items() -> None:
+    retriever = HybridRetriever(
+        [_RawSearchRetriever("first", [object()]), _FakeRetriever("second")]
+    )
+    retriever.index([_chunk("a")])
+
+    with pytest.raises(RetrieverContractError, match="must return a sequence"):
+        retriever.search("query", top_k=1)
+
+
+def test_search_wraps_source_exceptions() -> None:
+    retriever = HybridRetriever(
+        [_RaisingSearchRetriever("first"), _FakeRetriever("second")]
+    )
+    retriever.index([_chunk("a")])
+
+    with pytest.raises(
+        RetrieverContractError, match="returned an invalid ranking"
+    ) as captured:
+        retriever.search("query", top_k=1)
+
+    assert isinstance(captured.value.__cause__, RuntimeError)
+
+
+def test_index_rejects_non_sequence_chunks() -> None:
+    first = _CountingRetriever("first")
+    second = _CountingRetriever("second")
+    retriever = HybridRetriever([first, second])
+
+    with pytest.raises(RetrieverContractError, match="must be a sequence"):
+        retriever.index(cast("Sequence[Chunk]", "chunks"))
+
+    assert first.index_calls == 0
+    assert second.index_calls == 0
+
+
+def test_index_rejects_duplicate_chunk_identifiers() -> None:
+    first = _CountingRetriever("first")
+    second = _CountingRetriever("second")
+    retriever = HybridRetriever([first, second])
+
+    with pytest.raises(RetrieverContractError, match="duplicate chunk identifier"):
+        retriever.index([_chunk("a"), _chunk("a")])
+
+    assert first.index_calls == 0
+    assert second.index_calls == 0
