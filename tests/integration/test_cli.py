@@ -6,7 +6,15 @@ from pathlib import Path
 import pytest
 
 import retrieval_lab.cli.app as cli_app
-from retrieval_lab import load_result
+from retrieval_lab import (
+    EvaluationResult,
+    LatencyStats,
+    QualityGateConfig,
+    QueryEvaluation,
+    RetrieverMetrics,
+    evaluate_quality_gates,
+    load_result,
+)
 from retrieval_lab.cli.app import main
 from retrieval_lab.exceptions import (
     EvaluationError,
@@ -433,3 +441,133 @@ def test_cli_known_run_failures_are_exit_three(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "retrieval-lab: evaluation error\n"
+
+
+def test_cli_without_command_reports_usage_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main([])
+    assert raised.value.code == 2
+    assert "the following arguments are required: command" in (capsys.readouterr().err)
+
+
+def test_cli_maps_builtin_exceptions_to_input_error(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        raise ValueError("boom")
+
+    monkeypatch.setattr(cli_app, "compare_result_files", fail)
+
+    assert main(["compare", "a.json", "b.json"]) == 2
+    captured = capsys.readouterr()
+    assert captured.err == "retrieval-lab: configuration or input error\n"
+    assert "Traceback" not in captured.err
+
+
+def test_inspect_text_output_lists_quality_gates(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    query = QueryEvaluation(
+        query_id="q-1",
+        retrieved_ids=("doc-1",),
+        metrics_by_cutoff={1: {"recall": 1.0}},
+    )
+    result = EvaluationResult(
+        run_id="run",
+        metrics={"keyword": RetrieverMetrics({1: {"recall": 1.0}})},
+        query_results={"keyword": (query,)},
+        manifest={
+            "dataset_hash": "d" * 64,
+            "query_ids": ["q-1"],
+            "relevance_level": "document",
+            "metric_version": 1,
+            "top_k": [1],
+        },
+    )
+    report = evaluate_quality_gates(
+        result,
+        (QualityGateConfig(retriever="keyword", metric="recall@1", min_value=0.5),),
+    )
+    path = tmp_path / "result.json"
+    result.with_quality_gates(report).save_json(path)
+
+    assert main(["inspect", str(path)]) == 0
+    text = capsys.readouterr().out
+    assert "[0] keyword recall@1: PASS" in text
+
+
+def test_inspect_text_output_handles_query_without_latency(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    query = QueryEvaluation(
+        query_id="q-1",
+        retrieved_ids=("doc-1",),
+        metrics_by_cutoff={1: {"recall": 1.0}},
+        search_latency_ms=None,
+    )
+    result = EvaluationResult(
+        run_id="run",
+        metrics={"keyword": RetrieverMetrics({1: {"recall": 1.0}})},
+        query_results={"keyword": (query,)},
+    )
+    path = tmp_path / "result.json"
+    result.save_json(path)
+
+    assert main(["inspect", str(path), "--query-id", "q-1"]) == 0
+    text = capsys.readouterr().out
+    assert "query_evidence: q-1" in text
+    assert "search_latency_ms" not in text
+
+
+def test_compare_text_output_reports_diagnostics(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest: dict[str, object] = {
+        "dataset_hash": "d" * 64,
+        "query_ids": ["q-1"],
+        "relevance_level": "document",
+        "metric_version": 1,
+        "top_k": [1],
+    }
+
+    def make_result(latency: dict[str, LatencyStats] | None) -> EvaluationResult:
+        query = QueryEvaluation(
+            query_id="q-1",
+            retrieved_ids=("doc-1",),
+            metrics_by_cutoff={1: {"recall": 0.5}},
+            search_latency_ms=1.0 if latency else None,
+        )
+        return EvaluationResult(
+            run_id="run",
+            metrics={"keyword": RetrieverMetrics({1: {"recall": 0.5}})},
+            query_results={"keyword": (query,)},
+            latency=latency,
+            manifest=manifest,
+        )
+
+    baseline = make_result(
+        {
+            "keyword": LatencyStats(
+                mean_ms=1.0,
+                p50_ms=1.0,
+                p95_ms=1.0,
+                max_ms=1.0,
+                sample_count=1,
+            )
+        }
+    )
+    candidate = make_result(None)
+    baseline_path = tmp_path / "baseline.json"
+    candidate_path = tmp_path / "candidate.json"
+    baseline.save_json(baseline_path)
+    candidate.save_json(candidate_path)
+
+    assert main(["compare", str(baseline_path), str(candidate_path)]) == 0
+    text = capsys.readouterr().out
+    assert "diagnostic: latency:" in text
