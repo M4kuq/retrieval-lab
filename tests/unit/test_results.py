@@ -10,6 +10,9 @@ from retrieval_lab.artifacts import results as results_module
 from retrieval_lab.domain import (
     EvaluationResult,
     LatencyStats,
+    QualityGateCheck,
+    QualityGateReport,
+    QualityGateResult,
     QueryEvaluation,
     RetrieverMetrics,
 )
@@ -752,3 +755,271 @@ def test_result_from_dict_rejects_inconsistent_second_retriever(
 
     with pytest.raises(EvaluationError, match=expected):
         results_module.result_from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        (
+            {"retrieved_ids_by_cutoff": [(2, ("doc-a",))]},
+            "retrieved_ids_by_cutoff must be a mapping",
+        ),
+        (
+            {"retrieved_ids_by_cutoff": {2: 5, 3: ("doc-a", "doc-b")}},
+            r"retrieved_ids_by_cutoff\[2\] must be a sequence",
+        ),
+        (
+            {"search_latency_ms": "fast"},
+            "search_latency_ms must be a finite non-negative number",
+        ),
+        (
+            {"search_latency_ms": -1.0},
+            "search_latency_ms must be a finite non-negative number",
+        ),
+        (
+            {"search_latency_ms": float("inf")},
+            "search_latency_ms must be a finite non-negative number",
+        ),
+        ({"warnings": 5}, "warnings must be a sequence"),
+        (
+            {"warnings": ["ok", " "]},
+            "warnings must contain non-empty strings",
+        ),
+    ],
+)
+def test_query_evaluation_rejects_invalid_optional_fields(
+    overrides: dict[str, object], expected: str
+) -> None:
+    with pytest.raises(EvaluationError, match=expected):
+        QueryEvaluation(
+            query_id="q-1",
+            retrieved_ids=("doc-a", "doc-b"),
+            metrics_by_cutoff={2: {"recall": 0.0}, 3: {"recall": 1.0}},
+            **overrides,  # type: ignore[arg-type]
+        )
+
+
+def test_query_evaluation_serializes_warnings_without_latency() -> None:
+    query = QueryEvaluation(
+        query_id="q-1",
+        retrieved_ids=("doc-a",),
+        metrics_by_cutoff={1: {"recall": 1.0}},
+        warnings=("careful",),
+    )
+
+    payload = query.to_dict()
+
+    assert payload["warnings"] == ["careful"]
+    assert "search_latency_ms" not in payload
+
+
+def _base_kwargs() -> dict[str, object]:
+    return {
+        "run_id": "run-日本語",
+        "metrics": {"keyword": _retriever_metrics()},
+        "query_results": {"keyword": [_query_evaluation()]},
+        "manifest": {"dataset": "日本語データ", "seed": 42},
+    }
+
+
+def _latency_stats() -> LatencyStats:
+    return LatencyStats(
+        mean_ms=2.0,
+        p50_ms=2.0,
+        p95_ms=2.0,
+        max_ms=2.0,
+        sample_count=1,
+        failure_count=0,
+    )
+
+
+def _timed_kwargs() -> dict[str, object]:
+    kwargs = _base_kwargs()
+    kwargs["query_results"] = {
+        "keyword": [
+            QueryEvaluation(
+                query_id="q-1",
+                retrieved_ids=("doc-2", "doc-1"),
+                metrics_by_cutoff={
+                    1: {"recall": 0.0, "hit_rate": 0.0},
+                    2: {"recall": 1.0, "hit_rate": 1.0},
+                },
+                search_latency_ms=2.0,
+            )
+        ]
+    }
+    kwargs["latency"] = {"keyword": _latency_stats()}
+    return kwargs
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        (
+            {
+                "latency": {"keyword": _latency_stats()},
+                "latency_stats": {"keyword": _latency_stats()},
+            },
+            "provide only one of latency or latency_stats",
+        ),
+        ({"latency": {}}, "latency must not be empty"),
+        ({"latency": {"keyword": object()}}, "must be LatencyStats"),
+        (
+            {"latency": {"bm25": _latency_stats()}},
+            "must contain the same retriever names",
+        ),
+        ({"query_results": {}}, "query_results must not be empty"),
+        ({"query_results": {"keyword": "q-1"}}, "must be a sequence"),
+    ],
+)
+def test_result_rejects_invalid_latency_and_query_results(
+    overrides: dict[str, object], expected: str
+) -> None:
+    kwargs = _timed_kwargs()
+    kwargs.update(overrides)
+
+    with pytest.raises(EvaluationError, match=expected):
+        EvaluationResult(**kwargs)  # type: ignore[arg-type]
+
+
+def test_result_latency_stats_alias_returns_latency() -> None:
+    result = EvaluationResult(**_timed_kwargs())  # type: ignore[arg-type]
+
+    assert result.latency_stats["keyword"].mean_ms == 2.0
+
+
+def _make_gate(
+    *,
+    metric: str = "recall@1",
+    actual: float = 0.5,
+    candidate: str = "run-日本語",
+    retriever: str = "keyword",
+    gate_index: int = 0,
+    constraint: str = "min_value",
+    threshold: float = 0.4,
+    reason: str = "candidate meets minimum",
+) -> QualityGateResult:
+    check = QualityGateCheck(
+        retriever=retriever,
+        metric=metric,
+        constraint=constraint,  # type: ignore[arg-type]
+        actual=actual,
+        threshold=threshold,
+        passed=True,
+        reason=reason,
+        candidate_run_id=candidate,
+    )
+    return QualityGateResult(
+        retriever=retriever,
+        metric=metric,
+        checks=(check,),
+        passed=True,
+        candidate_run_id=candidate,
+        gate_index=gate_index,
+    )
+
+
+@pytest.mark.parametrize(
+    ("gates", "expected"),
+    [
+        ("keyword", "quality_gates must be a sequence"),
+        ([object()], "must contain QualityGateResult"),
+        ([_make_gate(candidate="other-run")], "candidate run ID differs"),
+        (
+            [_make_gate(), _make_gate(metric="hit_rate@1")],
+            "must not contain duplicate gate indexes",
+        ),
+        (
+            [_make_gate(retriever="bm25")],
+            "quality gate references an unavailable retriever",
+        ),
+        (
+            [
+                _make_gate(
+                    metric="latency_mean_ms",
+                    actual=2.0,
+                    constraint="max_value",
+                    threshold=3.0,
+                    reason="candidate meets maximum",
+                )
+            ],
+            "quality gate references unavailable latency",
+        ),
+        ([_make_gate(metric="bogus")], "quality gate metric is invalid"),
+        ([_make_gate(metric="@1")], "quality gate metric is invalid"),
+        ([_make_gate(metric="recall@x")], "quality gate metric is invalid"),
+        ([_make_gate(metric="recall@01")], "quality gate metric is invalid"),
+        ([_make_gate(metric="recall@0")], "quality gate metric is invalid"),
+        (
+            [_make_gate(metric="recall@" + "9" * 5000)],
+            "quality gate metric is invalid",
+        ),
+    ],
+)
+def test_result_rejects_invalid_quality_gates(gates: object, expected: str) -> None:
+    kwargs = _base_kwargs()
+    kwargs["quality_gates"] = gates
+
+    with pytest.raises(EvaluationError, match=expected):
+        EvaluationResult(**kwargs)  # type: ignore[arg-type]
+
+
+def test_result_accepts_latency_quality_gate() -> None:
+    kwargs = _timed_kwargs()
+    kwargs["quality_gates"] = [
+        _make_gate(
+            metric="latency_mean_ms",
+            actual=2.0,
+            constraint="max_value",
+            threshold=3.0,
+            reason="candidate meets maximum",
+        )
+    ]
+
+    result = EvaluationResult(**kwargs)  # type: ignore[arg-type]
+
+    assert result.quality_gates[0].metric == "latency_mean_ms"
+
+
+def test_with_quality_gates_accepts_sequence_and_report() -> None:
+    result = _result()
+    gate = _make_gate()
+
+    updated = result.with_quality_gates([gate])
+    assert updated.quality_gates == (gate,)
+    assert result.quality_gates == ()
+
+    report = QualityGateReport(
+        candidate_run_id="run-日本語",
+        baseline_run_id=None,
+        results=(gate,),
+    )
+    assert result.with_quality_gates(report).quality_gates == (gate,)
+
+
+def test_with_quality_gates_rejects_mismatched_report() -> None:
+    report = QualityGateReport(
+        candidate_run_id="other-run",
+        baseline_run_id=None,
+        results=(_make_gate(candidate="other-run"),),
+    )
+
+    with pytest.raises(
+        EvaluationError, match="quality gate report candidate run ID differs"
+    ):
+        _result().with_quality_gates(report)
+
+
+def test_with_quality_gates_rejects_invalid_type() -> None:
+    with pytest.raises(
+        EvaluationError, match="must be a QualityGateReport or a sequence"
+    ):
+        _result().with_quality_gates("gates")  # type: ignore[arg-type]
+
+
+def test_result_to_json_wraps_unserializable_state() -> None:
+    result = _result()
+    object.__setattr__(result, "manifest", {"callback": object()})
+
+    with pytest.raises(EvaluationError, match="could not be serialized"):
+        result.to_json()
