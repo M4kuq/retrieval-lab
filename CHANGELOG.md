@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project follows Semantic
 Versioning once the first public release is published.
 
+## [Unreleased]
+
+Changes since 0.1.0rc1, developed under the internal v0.2–v0.4 milestones.
+The package version remains 0.1.0rc1 until the next release candidate is
+cut.
+
+### Added
+
+- Dataset inspection foundation: `inspect_dataset()` validates an evaluation
+  dataset against a corpus and returns a typed `DatasetInspectionReport` with
+  stable issue codes (v0.2).
+- Dataset authoring models with explicit provenance: `DatasetDraft`,
+  `DraftQuery`, and `DatasetProvenance` track origin and review status for
+  datasets that are still being prepared (v0.2).
+- Provider-independent synthetic dataset generation boundary:
+  `generate_synthetic_draft()` produces explicitly experimental, unreviewed
+  drafts from a caller-supplied generator, with `mark_draft_in_review()` and
+  `mark_draft_reviewed()` driving the human review states (v0.2).
+- Dataset review workflow: draft persistence, per-query review decisions,
+  draft status reporting, and bundle finalization, exposed through the public
+  API and thin `dataset` CLI commands (v0.2).
+- Reusable public demo API: `compare_retrievers_for_query()` and
+  `retrieval_metric_explanations()` provide typed, presentation-ready demo
+  results, with a Streamlit example built on top of them (v0.3).
+- Deterministic answer evaluation: `evaluate_answer()` and
+  `evaluate_answers()` score generated answers with `exact_match` and
+  `token_f1`, and a provider-independent generation boundary
+  (`CallableGenerator`) supplies answers without provider dependencies (v0.4).
+
+### Fixed
+
+- Restored `ruff check` and `ruff format` compliance on `main` after the
+  v0.4 changes landed, so the CI quality job is green again (#29).
+
 ## [0.1.0rc1] - 2026-08-10
 
 ### Added
@@ -53,8 +87,3 @@ Versioning once the first public release is published.
   runner-produced results include per-retriever `latency` and per-query search
   timing/warnings, plus runtime-only manifest metadata. Consumers should ignore
   unknown result fields and continue accepting older results without latency.
-
-## Unreleased
-
-Development changes after this release candidate are intentionally kept
-separate from the release-candidate notes above.
