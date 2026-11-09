@@ -1,7 +1,10 @@
+import os
+import re
 from pathlib import Path
 
 import pytest
 
+from retrieval_lab import loaders
 from retrieval_lab.exceptions import CorpusValidationError
 from retrieval_lab.loaders import load_documents
 
@@ -180,3 +183,114 @@ def test_load_rejects_directory_without_supported_files(tmp_path: Path) -> None:
 def test_load_rejects_missing_path(tmp_path: Path) -> None:
     with pytest.raises(CorpusValidationError, match="does not exist"):
         load_documents(tmp_path / "missing")
+
+
+def test_load_rejects_non_path_values() -> None:
+    with pytest.raises(CorpusValidationError, match="must be a string or Path"):
+        load_documents(123)  # type: ignore[arg-type]
+
+
+def test_load_wraps_path_inspection_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_exists(self: Path) -> bool:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "exists", broken_exists)
+
+    with pytest.raises(CorpusValidationError, match="cannot inspect corpus path"):
+        load_documents(tmp_path)
+
+
+@pytest.mark.parametrize("include", ["*.txt", b"*.txt", {"*.txt"}])
+def test_load_rejects_non_sequence_include(tmp_path: Path, include: object) -> None:
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+
+    with pytest.raises(
+        CorpusValidationError, match="include must be a sequence of glob strings"
+    ):
+        load_documents(tmp_path, include=include)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("patterns", [("",), ("  ",), (123,)])
+def test_load_rejects_blank_or_non_string_include_patterns(
+    tmp_path: Path, patterns: tuple[object, ...]
+) -> None:
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+
+    with pytest.raises(
+        CorpusValidationError, match="include must contain non-empty glob strings"
+    ):
+        load_documents(tmp_path, include=patterns)  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFOs")
+def test_load_rejects_non_regular_paths(tmp_path: Path) -> None:
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+
+    with pytest.raises(
+        CorpusValidationError, match="must be a regular file or directory"
+    ):
+        load_documents(fifo)
+
+
+def test_discovery_wraps_inspection_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_is_file(self: Path) -> bool:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "is_file", broken_is_file)
+
+    with pytest.raises(
+        CorpusValidationError,
+        match=rf"cannot inspect corpus {re.escape(str(tmp_path))}: denied",
+    ):
+        load_documents(tmp_path)
+
+
+def test_relative_source_rejects_paths_outside_the_root() -> None:
+    with pytest.raises(CorpusValidationError, match="outside corpus root"):
+        loaders._relative_source(Path("/elsewhere/doc.txt"), Path("/corpus"))
+
+
+def test_read_failures_are_wrapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "manual.txt"
+    source.write_text("valid", encoding="utf-8")
+
+    def broken_read_bytes(self: Path) -> bytes:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "read_bytes", broken_read_bytes)
+
+    with pytest.raises(CorpusValidationError, match="cannot read corpus file"):
+        load_documents(source)
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_jsonl_rejects_blank_lines(tmp_path: Path, blank: str) -> None:
+    source = tmp_path / "corpus.jsonl"
+    source.write_text(
+        f'{{"id": "a", "text": "x"}}\n{blank}\n{{"id": "b", "text": "y"}}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CorpusValidationError, match=r":2: blank lines are not valid"):
+        load_documents(source)
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_jsonl_rejects_non_standard_json_constants(
+    tmp_path: Path, constant: str
+) -> None:
+    source = tmp_path / "corpus.jsonl"
+    source.write_text(
+        f'{{"id": "a", "text": "x", "metadata": {{"score": {constant}}}}}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CorpusValidationError, match="non-standard JSON constant"):
+        load_documents(source)
