@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import email
+import io
 import json
+import re
 import subprocess
 import sys
 import tarfile
@@ -56,6 +59,17 @@ def test_release_metadata_and_manifest_are_explicit() -> None:
     )
     assert "recursive-include notebooks *.ipynb" in manifest
     assert "recursive-include tools *.py" in manifest
+
+
+def test_index_python_snippets_run() -> None:
+    text = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```python\n(.*?)```", text, flags=re.DOTALL)
+    assert blocks
+    for block in blocks:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exec(compile(block, "docs/index.md", "exec"), {})
+        assert stdout.getvalue().strip() == "1.0"
 
 
 def test_runtime_version_matches_distribution_metadata() -> None:

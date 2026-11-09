@@ -59,6 +59,11 @@ result = EvaluationRunner.quick_evaluate(
 print(result.metrics["bm25"].recall_at(1))
 ```
 
+`result.metrics` is keyed by strategy name, and `recall_at(k)` returns the
+macro-averaged Recall@k for a cutoff that was evaluated (it raises `KeyError`
+for any other cutoff). The [API reference](https://github.com/M4kuq/retrieval-lab/blob/main/docs/api-reference.md#runner-and-result-loading)
+covers the runner and result contracts in detail.
+
 The [tutorial](https://github.com/M4kuq/retrieval-lab/blob/main/docs/tutorial.md),
 [FAQ](https://github.com/M4kuq/retrieval-lab/blob/main/docs/faq.md),
 [API minimum](https://github.com/M4kuq/retrieval-lab/blob/main/docs/api-minimum.md),

@@ -140,6 +140,38 @@ def test_api_reference_lists_exactly_the_public_surface() -> None:
     assert documented == set(retrieval_lab.__all__) | set(metrics.__all__)
 
 
+def test_api_reference_descriptions_match_public_docstrings() -> None:
+    import inspect
+
+    import retrieval_lab.metrics as metrics
+
+    descriptions: dict[str, str] = {}
+    in_bullet = False
+    for line in API_REFERENCE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("- "):
+            in_bullet = True
+        elif line and not line[0].isspace():
+            in_bullet = False
+        if in_bullet:
+            match = re.match(r"- `([A-Za-z_][A-Za-z0-9_]*)` — (.*)$", line)
+            if match:
+                descriptions[match.group(1)] = match.group(2)
+
+    objects = {name: getattr(retrieval_lab, name) for name in retrieval_lab.__all__}
+    objects.update({name: getattr(metrics, name) for name in metrics.__all__})
+    assert set(descriptions) == set(objects)
+    for name, description in descriptions.items():
+        docstring = inspect.getdoc(objects[name])
+        if docstring is None:
+            continue
+        first_line = re.sub(
+            r":(?:class|func|meth|mod|attr):`([^`]+)`",
+            r"\1",
+            docstring.splitlines()[0],
+        ).replace("`", "")
+        assert description == first_line, name
+
+
 def test_distribution_is_typed() -> None:
     package_dir = Path(retrieval_lab.__file__).parent
     assert (package_dir / "py.typed").is_file()

@@ -2,8 +2,9 @@
 
 This page is the reference for the stable public API defined in
 [API minimum](api-minimum.md). Every name listed here is importable from the
-package root unless a module path is stated, and the list is pinned to
-`retrieval_lab.__all__` (plus the metric functions in `retrieval_lab.metrics`)
+package root, except the six metric functions at the end, which are imported
+from `retrieval_lab.metrics` and are not exported from the package root. The
+list is pinned to `retrieval_lab.__all__` (plus `retrieval_lab.metrics.__all__`)
 by the public-API tests, so it cannot drift from the exported surface.
 Anything not listed here is internal implementation and may change without
 notice.
@@ -54,7 +55,7 @@ corpus or an index.
 - `RelevanceLevel` — Literal selecting document-level or chunk-level relevance.
 - `validate_dataset` — Validate dataset-to-corpus identifiers at the explicit relevance level.
 - `RetrievedQueryResult` — An immutable document ranking produced by an existing search system.
-- `evaluate_results` — Evaluate existing document rankings using the core metrics.
+- `evaluate_results` — Evaluate existing document rankings using Retrieval Lab's core metrics.
 - `load_documents` — Load supported local documents in deterministic source-path order.
 
 ## Configuration
@@ -154,7 +155,7 @@ Drafts stay unevaluable until they are finalized through human review.
 - `DraftQuery` — One editable query whose relevance judgments may still be incomplete.
 - `DatasetOrigin` — Literal naming a dataset origin: unknown, human, synthetic, or mixed.
 - `DatasetProvenance` — Dataset-level origin and human-review state.
-- `DatasetReviewStatus` — Literal naming the human-review state of a dataset draft.
+- `DatasetReviewStatus` — Literal naming the human-review state recorded in a dataset's provenance.
 - `DatasetInspectionCode` — Literal naming the deterministic dataset-inspection finding kinds.
 - `DatasetInspectionIssue` — One deterministic dataset-quality finding that requires human review.
 - `DatasetInspectionReport` — Summary of non-destructive quality diagnostics for one dataset.
@@ -198,7 +199,8 @@ from the exceptions module, and the errors module is a compatibility alias.
 
 ## Metric functions
 
-Pure per-query metric primitives, importable from the metrics module.
+Pure per-query metric primitives. Import them from `retrieval_lab.metrics`;
+they are not exported from the package root.
 
 - `average_precision_at_k` — Return AP@k with denominator min(number of relevant items, k).
 - `hit_rate_at_k` — Return 1.0 when a relevant identifier occurs in the first k results.
