@@ -473,8 +473,10 @@ def test_inspection_rejects_unknown_query_and_allows_symlinked_ancestor(
 def _gated_output(tmp_path: Path) -> ExperimentOutput:
     project = initialize_project(tmp_path / "project")
     config_path = project.target / "retrieval-lab.yaml"
+    template = config_path.read_text(encoding="utf-8")
+    assert "quality_gates: []" in template
     config_path.write_text(
-        config_path.read_text(encoding="utf-8").replace(
+        template.replace(
             "quality_gates: []",
             "quality_gates:\n  - retriever: bm25\n    metric: recall@1\n"
             "    min_value: 0.0",
@@ -484,7 +486,7 @@ def _gated_output(tmp_path: Path) -> ExperimentOutput:
     return run_configured_experiment(config_path)
 
 
-def _tampered_payload(output: ExperimentOutput) -> dict[str, object]:
+def _load_payload(output: ExperimentOutput) -> dict[str, object]:
     return json.loads(output.paths[0].read_text(encoding="utf-8"))
 
 
@@ -576,7 +578,7 @@ def test_path_checks_wrap_symlink_probe_failures(
 
     monkeypatch.setattr(Path, "is_symlink", broken_is_symlink)
 
-    with pytest.raises(ConfigurationError, match="path is not accessible"):
+    with pytest.raises(ConfigurationError, match=r"^path is not accessible$"):
         initialize_project(tmp_path / "project")
 
 
@@ -606,6 +608,7 @@ def test_run_csv_only_skips_the_json_report(tmp_path: Path) -> None:
 
     assert [path.name for path in output.paths] == ["summary.csv", "per_query.csv"]
     assert not (output_dir / "result.json").exists()
+    assert not (output_dir / "report.html").exists()
 
 
 def test_run_wraps_report_save_failures(
@@ -618,12 +621,15 @@ def test_run_wraps_report_save_failures(
 
     monkeypatch.setattr(EvaluationResult, "save_json", broken_save_json)
 
-    with pytest.raises(EvaluationError, match="could not save experiment reports"):
+    with pytest.raises(
+        EvaluationError, match="could not save experiment reports"
+    ) as exc_info:
         run_configured_experiment(
             project.target / "retrieval-lab.yaml",
             output_dir=project.target / "out",
             formats=("json",),
         )
+    assert isinstance(exc_info.value.__cause__, EvaluationError)
 
 
 def test_run_rejects_non_sequence_formats(tmp_path: Path) -> None:
@@ -691,7 +697,7 @@ def test_gate_evaluation_requires_a_candidate_path() -> None:
 
 def test_embedded_gates_require_an_embedded_config(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     _manifest(payload).pop("config")
 
     with pytest.raises(ConfigurationError, match="does not contain embedded"):
@@ -700,7 +706,7 @@ def test_embedded_gates_require_an_embedded_config(tmp_path: Path) -> None:
 
 def test_embedded_gates_reject_malformed_entries(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     config = _manifest(payload)["config"]
     assert isinstance(config, dict)
     config["quality_gates"] = [{"retriever": "bm25"}]
@@ -711,48 +717,59 @@ def test_embedded_gates_reject_malformed_entries(tmp_path: Path) -> None:
 
 def test_embedded_gates_reject_non_string_fields(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     config = _manifest(payload)["config"]
     assert isinstance(config, dict)
     gates = config["quality_gates"]
     assert isinstance(gates, list)
     gates[0]["retriever"] = 123
 
-    with pytest.raises(ConfigurationError, match=r"quality_gates\[0\] is invalid"):
+    with pytest.raises(
+        ConfigurationError, match=r"quality_gates\[0\] is invalid"
+    ) as exc_info:
         evaluate_configured_quality_gates(_rewrite_result(output, payload))
+    assert "candidate embedded quality_gates[0].retriever must be a string" in str(
+        exc_info.value.__cause__
+    )
 
 
 def test_embedded_gates_reject_non_numeric_thresholds(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     config = _manifest(payload)["config"]
     assert isinstance(config, dict)
     gates = config["quality_gates"]
     assert isinstance(gates, list)
     gates[0]["min_value"] = True
 
-    with pytest.raises(ConfigurationError, match=r"quality_gates\[0\] is invalid"):
+    with pytest.raises(
+        ConfigurationError, match=r"quality_gates\[0\] is invalid"
+    ) as exc_info:
         evaluate_configured_quality_gates(_rewrite_result(output, payload))
+    assert "must be numeric" in str(exc_info.value.__cause__)
 
 
 def test_embedded_gates_reject_thresholds_that_overflow_floats(
     tmp_path: Path,
 ) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     config = _manifest(payload)["config"]
     assert isinstance(config, dict)
     gates = config["quality_gates"]
     assert isinstance(gates, list)
     gates[0]["min_value"] = 10**400
 
-    with pytest.raises(ConfigurationError, match=r"quality_gates\[0\] is invalid"):
+    with pytest.raises(
+        ConfigurationError, match=r"quality_gates\[0\] is invalid"
+    ) as exc_info:
         evaluate_configured_quality_gates(_rewrite_result(output, payload))
+    assert "must be finite" in str(exc_info.value.__cause__)
 
 
 def test_embedded_candidate_requires_all_identity_fields(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     _manifest(payload).pop("seed")
 
     with pytest.raises(ConfigurationError, match="missing configured run identity"):
@@ -761,7 +778,7 @@ def test_embedded_candidate_requires_all_identity_fields(tmp_path: Path) -> None
 
 def test_embedded_candidate_rejects_a_non_hash_run_id(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     run = payload["run"]
     assert isinstance(run, dict)
     run["id"] = "not-a-hash"
@@ -772,7 +789,7 @@ def test_embedded_candidate_rejects_a_non_hash_run_id(tmp_path: Path) -> None:
 
 def test_embedded_candidate_rejects_a_mismatched_run_id(tmp_path: Path) -> None:
     output = _gated_output(tmp_path)
-    payload = _tampered_payload(output)
+    payload = _load_payload(output)
     run = payload["run"]
     assert isinstance(run, dict)
     run["id"] = "e" * 64
