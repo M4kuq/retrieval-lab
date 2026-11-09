@@ -1,6 +1,9 @@
+import math
+
 import pytest
 
 from retrieval_lab.answer_evaluation import (
+    AnswerEvaluation,
     AnswerEvaluationResult,
     AnswerReference,
     evaluate_answer,
@@ -321,3 +324,119 @@ def test_exact_and_token_f1_require_nonempty_reference() -> None:
         exact_match("answer", "")
     with pytest.raises(EvaluationError, match="reference"):
         token_f1("answer", "")
+
+
+def test_token_f1_treats_punctuation_as_its_own_token() -> None:
+    assert token_f1("hello, world", "hello, world") == pytest.approx(1.0)
+    assert token_f1("hello, world", "hello world") == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize("value", [["doc-1"], "doc-1", 42])
+def test_answer_reference_rejects_non_set_document_ids(value: object) -> None:
+    with pytest.raises(EvaluationError, match="must be a set"):
+        AnswerReference("q-1", relevant_document_ids=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("identifier", ["", "   ", 42])
+def test_answer_reference_rejects_invalid_document_id(identifier: object) -> None:
+    with pytest.raises(EvaluationError, match="document IDs"):
+        AnswerReference(
+            "q-1",
+            relevant_document_ids={identifier},  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("value", ["", "   ", 42])
+def test_answer_reference_rejects_invalid_reference_answer(value: object) -> None:
+    with pytest.raises(EvaluationError, match="reference_answer"):
+        AnswerReference("q-1", reference_answer=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", ["fact", 42])
+def test_answer_reference_rejects_non_sequence_required_facts(
+    value: object,
+) -> None:
+    with pytest.raises(EvaluationError, match="must be a sequence"):
+        AnswerReference("q-1", required_facts=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("fact", ["", "   ", 42])
+def test_answer_reference_rejects_invalid_required_fact(fact: object) -> None:
+    with pytest.raises(EvaluationError, match=r"required_facts\[0\]"):
+        AnswerReference("q-1", required_facts=[fact])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [1, "yes", None])
+def test_answer_reference_rejects_non_bool_answerable(value: object) -> None:
+    with pytest.raises(EvaluationError, match="answerable"):
+        AnswerReference("q-1", answerable=value)  # type: ignore[arg-type]
+
+
+def test_result_rejects_empty_evaluations() -> None:
+    with pytest.raises(EvaluationError, match="must not be empty"):
+        AnswerEvaluationResult(())
+
+
+def test_result_rejects_non_evaluation_items() -> None:
+    with pytest.raises(EvaluationError, match="must be an AnswerEvaluation"):
+        AnswerEvaluationResult(("not-an-evaluation",))  # type: ignore[arg-type]
+
+
+def test_result_rejects_non_finite_metrics_when_serializing() -> None:
+    evaluation = AnswerEvaluation(
+        query_id="q-1",
+        exact_match=None,
+        token_f1=None,
+        citation_presence=0.0,
+        citation_validity=0.0,
+        citation_precision=0.0,
+        citation_recall=0.0,
+        citation_coverage=0.0,
+        empty_answer=True,
+        required_fact_coverage=None,
+        latency_ms=math.inf,
+        token_usage=None,
+        estimated_cost=None,
+        failure_type="unscored",
+    )
+
+    with pytest.raises(EvaluationError, match="finite"):
+        AnswerEvaluationResult((evaluation,)).to_dict()
+
+
+def test_evaluate_answer_rejects_wrong_argument_types() -> None:
+    reference = AnswerReference("q-1")
+    request = _request()
+    output = _output("answer")
+
+    with pytest.raises(EvaluationError, match="reference must be"):
+        evaluate_answer("q-1", request, output)  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="request must be"):
+        evaluate_answer(reference, "q-1", output)  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="output must be"):
+        evaluate_answer(reference, request, "answer")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("references", "requests", "outputs", "name"),
+    [
+        ("q-1", [], [], "references"),
+        ([], "q-1", [], "requests"),
+        ([], [], "q-1", "outputs"),
+    ],
+)
+def test_evaluate_answers_rejects_non_sequence_batches(
+    references: object,
+    requests: object,
+    outputs: object,
+    name: str,
+) -> None:
+    with pytest.raises(EvaluationError, match=f"{name} must be a sequence"):
+        evaluate_answers(references, requests, outputs)  # type: ignore[arg-type]
+
+
+def test_exact_match_and_token_f1_reject_non_string_inputs() -> None:
+    with pytest.raises(EvaluationError, match="answer must be a string"):
+        exact_match(42, "reference")  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="reference must be a string"):
+        token_f1("answer", None)  # type: ignore[arg-type]
