@@ -615,3 +615,269 @@ def test_custom_backend_identity_is_hashed_and_changes_settings() -> None:
     serialized = repr(first_settings)
     assert "configuration" not in serialized
     assert "secret" not in serialized
+
+
+def test_default_backend_cache_identity_is_the_provider_name() -> None:
+    backend = dense._SentenceTransformersEmbeddingBackend(
+        model_id="model/id",
+        revision=None,
+    )
+
+    assert backend.cache_identity == "sentence-transformers"
+
+
+def test_default_adapter_loads_the_model_once_and_reuses_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory_calls: list[tuple[str, str | None]] = []
+
+    class FakeSentenceTransformer:
+        def encode(
+            self,
+            sentences: Sequence[str],
+            *,
+            batch_size: int,
+            normalize_embeddings: bool,
+            convert_to_numpy: bool,
+            show_progress_bar: bool,
+            prompt: str,
+        ) -> object:
+            return [[1.0, 0.0] for _ in sentences]
+
+    def factory(
+        model_id: str, *, revision: str | None = None
+    ) -> FakeSentenceTransformer:
+        factory_calls.append((model_id, revision))
+        return FakeSentenceTransformer()
+
+    monkeypatch.setattr(
+        dense,
+        "import_module",
+        lambda module_name: SimpleNamespace(SentenceTransformer=factory),
+    )
+    retriever = DenseRetriever(model_id="model/id")
+
+    retriever.index([_chunk("document", "document")])
+    results = retriever.search("find", top_k=1)
+
+    assert factory_calls == [("model/id", None)]
+    assert [item.chunk_id for item in results] == ["document"]
+    assert retriever.settings["resolved_revision"] is None
+
+
+def test_reindexing_identical_chunks_is_a_no_op() -> None:
+    backend = FakeEmbeddingBackend({("passage: document",): [[1.0, 0.0]]})
+    retriever = DenseRetriever(backend=backend)
+    chunks = [_chunk("document", "document")]
+
+    retriever.index(chunks)
+    retriever.index(chunks)
+
+    assert backend.calls == [(("passage: document",), 32)]
+
+
+def test_cache_identity_read_failure_is_wrapped() -> None:
+    class ExplodingIdentityBackend:
+        metadata = EmbeddingModelMetadata(model_id="exploding")
+
+        @property
+        def cache_identity(self) -> object:
+            raise RuntimeError("identity unavailable")
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            return [[1.0] for _ in texts]
+
+    retriever = DenseRetriever(backend=ExplodingIdentityBackend())
+
+    with pytest.raises(
+        RetrieverContractError, match="cache identity could not be read"
+    ) as raised:
+        _ = retriever.settings
+    assert isinstance(raised.value.__cause__, RuntimeError)
+
+
+def test_cyclic_cache_identity_is_rejected() -> None:
+    backend = FakeEmbeddingBackend({})
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+    backend.cache_identity = cyclic
+    retriever = DenseRetriever(backend=backend)
+
+    with pytest.raises(RetrieverContractError, match="cyclic or too deeply nested"):
+        _ = retriever.settings
+
+
+def test_cache_export_requires_an_index() -> None:
+    retriever = DenseRetriever(backend=FakeEmbeddingBackend({}))
+
+    with pytest.raises(RetrieverContractError, match="no cacheable index"):
+        retriever._cache_export()
+
+
+def test_cache_restore_rejects_empty_chunks() -> None:
+    retriever = DenseRetriever(backend=FakeEmbeddingBackend({}))
+
+    with pytest.raises(RetrieverContractError, match="cannot restore an empty index"):
+        retriever._cache_restore([], [], resolved_revision=None)
+
+
+def test_cache_restore_rejects_a_stale_resolved_revision() -> None:
+    retriever = DenseRetriever(backend=FakeEmbeddingBackend({}))
+
+    with pytest.raises(RetrieverContractError, match="resolved revision is stale"):
+        retriever._cache_restore(
+            [_chunk("document", "document")],
+            [[1.0, 0.0]],
+            resolved_revision="some-other-revision",
+        )
+
+
+def test_inner_product_overflow_is_a_typed_error() -> None:
+    backend = FakeEmbeddingBackend(
+        {
+            ("passage: document",): [[1e308, 1e308]],
+            ("query: find",): [[1e308, 1e308]],
+        }
+    )
+    retriever = DenseRetriever(backend=backend, normalize_embeddings=False)
+    retriever.index([_chunk("document", "document")])
+
+    with pytest.raises(RetrieverContractError, match="score must be finite"):
+        retriever.search("find", top_k=1)
+
+
+def test_normalization_rejects_non_finite_norms() -> None:
+    largest = 1.7976931348623157e308
+    backend = FakeEmbeddingBackend({("passage: document",): [[largest, largest]]})
+    retriever = DenseRetriever(backend=backend)
+
+    with pytest.raises(RetrieverContractError, match="finite, non-zero L2 norm"):
+        retriever.index([_chunk("document", "document")])
+
+
+def test_metadata_property_library_errors_propagate() -> None:
+    class UnavailableMetadataBackend:
+        @property
+        def metadata(self) -> EmbeddingModelMetadata:
+            raise OptionalDependencyError("install the extra")
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            return [[1.0] for _ in texts]
+
+    with pytest.raises(OptionalDependencyError, match="install the extra"):
+        DenseRetriever(backend=UnavailableMetadataBackend())
+
+
+def test_metadata_must_be_an_embedding_model_metadata_value() -> None:
+    class WrongMetadataBackend:
+        metadata = "not-metadata"
+
+        def encode(
+            self,
+            texts: Sequence[str],
+            *,
+            batch_size: int,
+        ) -> Sequence[Sequence[float]]:
+            return [[1.0] for _ in texts]
+
+    with pytest.raises(
+        RetrieverContractError, match="must be an EmbeddingModelMetadata value"
+    ):
+        DenseRetriever(backend=cast("object", WrongMetadataBackend()))
+
+
+@pytest.mark.parametrize(
+    ("matrix", "message"),
+    [
+        ({"vectors": [[1.0]]}, "invalid documents matrix"),
+        (42, "invalid documents matrix"),
+        (["abc"], "row 0 must be a numeric vector"),
+        ([42], "row 0 must be a numeric vector"),
+    ],
+)
+def test_index_rejects_non_matrix_backend_responses(
+    matrix: object,
+    message: str,
+) -> None:
+    backend = FakeEmbeddingBackend({("passage: document",): matrix})
+    retriever = DenseRetriever(backend=backend, normalize_embeddings=False)
+
+    with pytest.raises(RetrieverContractError, match=message):
+        retriever.index([_chunk("document", "document")])
+
+
+def test_resolved_revision_falls_back_to_tokenizer_metadata() -> None:
+    tokenizer_commit = "b" * 64
+    model = SimpleNamespace(
+        config=SimpleNamespace(revision="tag"),
+        tokenizer=SimpleNamespace(init_kwargs={"_commit_hash": tokenizer_commit}),
+    )
+
+    assert (
+        dense._read_resolved_revision(model, requested_revision=None)
+        == tokenizer_commit
+    )
+
+
+def test_resolved_revision_tolerates_raising_attribute_access() -> None:
+    class GuardedModel:
+        @property
+        def config(self) -> object:
+            raise RuntimeError("config unavailable")
+
+    assert (
+        dense._read_resolved_revision(GuardedModel(), requested_revision=None) is None
+    )
+
+
+def test_resolved_revision_tolerates_a_broken_mapping_get() -> None:
+    class BrokenGetDict(dict):  # type: ignore[type-arg]
+        def get(self, key: object, default: object = None) -> object:
+            raise RuntimeError("broken mapping")
+
+    model = SimpleNamespace(config=BrokenGetDict({"_commit_hash": "a" * 40}))
+
+    assert dense._read_resolved_revision(model, requested_revision=None) is None
+
+
+def test_cache_identity_float_values_must_be_finite() -> None:
+    backend = FakeEmbeddingBackend({})
+    retriever = DenseRetriever(backend=backend)
+
+    backend.cache_identity = 1.5
+    assert "cache_identity_sha256" in retriever.settings["backend"]
+
+    backend.cache_identity = float("inf")
+    with pytest.raises(RetrieverContractError, match="cache identity must be finite"):
+        _ = retriever.settings
+
+
+def test_cache_identity_rejects_non_string_keys() -> None:
+    backend = FakeEmbeddingBackend({})
+    backend.cache_identity = {1: "x"}
+    retriever = DenseRetriever(backend=backend)
+
+    with pytest.raises(RetrieverContractError, match="keys must be strings"):
+        _ = retriever.settings
+
+
+def test_cache_identity_supports_sequences_and_rejects_other_types() -> None:
+    backend = FakeEmbeddingBackend({})
+    retriever = DenseRetriever(backend=backend)
+
+    backend.cache_identity = ["provider", 3]
+    assert "cache_identity_sha256" in retriever.settings["backend"]
+
+    backend.cache_identity = {"provider", "extra"}
+    with pytest.raises(RetrieverContractError, match="must contain JSON values"):
+        _ = retriever.settings
