@@ -952,7 +952,7 @@ def test_result_rejects_invalid_latency_and_query_results(case: str) -> None:
         "latency-retriever-mismatch": (
             "EvaluationResult latency and metrics must contain the same retriever names"
         ),
-        "empty-query-results": (r"EvaluationResult\.query_results must not be empty"),
+        "empty-query-results": r"EvaluationResult\.query_results must not be empty",
         "query-results-not-sequence": (
             r"EvaluationResult\.query_results\['keyword'\] must be a sequence"
         ),
@@ -1002,7 +1002,7 @@ def test_result_latency_stats_alias_returns_latency() -> None:
 def test_result_rejects_invalid_quality_gates(case: str) -> None:
     invalid_metric = "EvaluationResult quality gate metric is invalid"
     expected_by_case = {
-        "gates-not-sequence": (r"EvaluationResult\.quality_gates must be a sequence"),
+        "gates-not-sequence": r"EvaluationResult\.quality_gates must be a sequence",
         "gates-wrong-item-type": (
             r"EvaluationResult\.quality_gates must contain QualityGateResult"
         ),
