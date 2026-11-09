@@ -149,6 +149,27 @@ Caller-controlled generators; the library ships no provider client.
 - `GenerationOutput` — A validated generated answer plus observed generation latency.
 - `generate_answer` — Generate one answer and measure latency using a caller-controllable clock.
 
+## LLM-as-judge
+
+Caller-controlled judges in the same style as answer generators: the
+library renders the prompt, measures latency, and records verdicts and
+reported usage; it ships no provider client and never parses free-text
+judge output.
+
+- `Judge` — Minimal judge contract; providers remain caller-controlled.
+- `JudgeCallable` — Callable shape accepted for one judge request and its rendered prompt.
+- `CallableJudge` — Adapt an arbitrary synchronous callable to the public Judge contract.
+- `MockJudge` — Deterministic offline judge for tests, examples, and pipelines.
+- `JudgePromptTemplate` — A judge prompt template with a closed set of placeholders.
+- `DEFAULT_JUDGE_PROMPT_TEMPLATE` — A judge prompt template with a closed set of placeholders.
+- `JudgeRequest` — One generated answer awaiting judgment, with its evidence.
+- `JudgeVerdict` — One judge's validated score for one answer.
+- `JudgeUsage` — Token and cost usage reported by one judge invocation.
+- `JudgeOutput` — A validated verdict plus the prompt and latency that produced it.
+- `PanelJudgment` — Verdicts from several judges for one answer, with panel totals.
+- `judge_answer` — Judge one answer and measure latency using a caller-controllable clock.
+- `judge_answer_with_panel` — Judge one answer with several judges and aggregate their verdicts.
+
 ## Dataset authoring, inspection, and workflow
 
 Drafts stay unevaluable until they are finalized through human review.

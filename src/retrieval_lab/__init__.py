@@ -120,6 +120,21 @@ from retrieval_lab.generation import (
     MockGenerator,
     generate_answer,
 )
+from retrieval_lab.judging import (
+    DEFAULT_JUDGE_PROMPT_TEMPLATE,
+    CallableJudge,
+    Judge,
+    JudgeCallable,
+    JudgeOutput,
+    JudgePromptTemplate,
+    JudgeRequest,
+    JudgeUsage,
+    JudgeVerdict,
+    MockJudge,
+    PanelJudgment,
+    judge_answer,
+    judge_answer_with_panel,
+)
 from retrieval_lab.loaders import load_documents
 from retrieval_lab.quality import evaluate_quality_gates
 from retrieval_lab.retrievers import (
@@ -149,6 +164,7 @@ from retrieval_lab.synthetic import (
 )
 
 __all__ = [
+    "DEFAULT_JUDGE_PROMPT_TEMPLATE",
     "AnswerEvaluation",
     "AnswerEvaluationResult",
     "AnswerFailureType",
@@ -160,6 +176,7 @@ __all__ = [
     "BaseRetriever",
     "BootstrapDelta",
     "CallableGenerator",
+    "CallableJudge",
     "CallableRetriever",
     "CallableSyntheticGenerator",
     "Chunk",
@@ -213,13 +230,22 @@ __all__ = [
     "IncomparableRunError",
     "InitializedProject",
     "InspectionOutput",
+    "Judge",
+    "JudgeCallable",
+    "JudgeOutput",
+    "JudgePromptTemplate",
+    "JudgeRequest",
+    "JudgeUsage",
+    "JudgeVerdict",
     "KeywordRetriever",
     "KeywordRetrieverConfig",
     "LatencyStats",
     "MetricComparison",
     "MetricDelta",
     "MockGenerator",
+    "MockJudge",
     "OptionalDependencyError",
+    "PanelJudgment",
     "QualityGateCheck",
     "QualityGateConfig",
     "QualityGateReport",
@@ -261,6 +287,8 @@ __all__ = [
     "initialize_project",
     "inspect_dataset",
     "inspect_result",
+    "judge_answer",
+    "judge_answer_with_panel",
     "load_config",
     "load_dataset_draft",
     "load_documents",
