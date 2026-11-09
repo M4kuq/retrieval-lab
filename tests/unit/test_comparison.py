@@ -899,9 +899,7 @@ def _bootstrap_comparison(deltas: Sequence[float]) -> MetricComparison:
         relative_delta=sum(deltas) / len(deltas) / 0.5,
         classification="improved" if sum(deltas) > 0 else "unchanged",
     )
-    return MetricComparison(
-        "bm25", "recall", 1, aggregate, query_deltas=query_deltas
-    )
+    return MetricComparison("bm25", "recall", 1, aggregate, query_deltas=query_deltas)
 
 
 def test_bootstrap_constant_deltas_have_a_point_interval() -> None:
@@ -973,9 +971,7 @@ def test_bootstrap_rejects_invalid_arguments() -> None:
         bootstrap_metric_delta(comparison, confidence_level=0.0)
     with pytest.raises(EvaluationError, match="seed"):
         bootstrap_metric_delta(comparison, seed="42")  # type: ignore[arg-type]
-    empty = MetricComparison(
-        "bm25", "recall", 1, _valid_delta(), query_deltas=()
-    )
+    empty = MetricComparison("bm25", "recall", 1, _valid_delta(), query_deltas=())
     with pytest.raises(EvaluationError, match="per-query"):
         bootstrap_metric_delta(empty)
 
