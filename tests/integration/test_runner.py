@@ -721,3 +721,175 @@ def test_nested_dense_index_hashes_keep_distinct_strategy_paths() -> None:
         "dense",
         "hybrid.sources.dense",
     }
+
+
+class _BlankNameRetriever(_CountingRetriever):
+    @property
+    def name(self) -> str:
+        return "  "
+
+
+def _valid_documents() -> list[Document]:
+    return [Document(id="doc-1", text="alpha beta")]
+
+
+def _valid_queries() -> list[EvaluationQuery]:
+    return [EvaluationQuery(id="q-1", query="alpha", relevant_document_ids={"doc-1"})]
+
+
+def test_runner_rejects_non_dataset_dataset_argument() -> None:
+    with pytest.raises(DatasetValidationError, match="must be an EvaluationDataset"):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            dataset=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_runner_rejects_non_fixed_size_chunker() -> None:
+    with pytest.raises(ConfigurationError, match="must be a FixedSizeChunker"):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            chunker=object(),  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("cache_dir", ["", "   "])
+def test_runner_rejects_blank_cache_dir(cache_dir: str) -> None:
+    with pytest.raises(ConfigurationError, match="cache_dir must not be empty"):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            cache_dir=cache_dir,
+        )
+
+
+def test_runner_rejects_invalid_cache_dir_type() -> None:
+    with pytest.raises(ConfigurationError, match="cache_dir must be a valid path"):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            cache_dir=123,  # type: ignore[arg-type]
+        )
+
+
+def test_runner_from_typed_config_rejects_non_config() -> None:
+    with pytest.raises(ConfigurationError, match="config must be a RetrievalConfig"):
+        EvaluationRunner._from_typed_config(object())
+
+
+@pytest.mark.parametrize(
+    "documents",
+    [
+        {"doc-1"},
+        "doc-1",
+        [Document(id="doc-1", text="alpha"), "doc-2"],
+    ],
+)
+def test_runner_rejects_invalid_document_collections(
+    documents: object,
+) -> None:
+    with pytest.raises(CorpusValidationError, match="documents"):
+        EvaluationRunner(
+            documents=documents,  # type: ignore[arg-type]
+            queries=_valid_queries(),
+        )
+
+
+def test_runner_rejects_empty_documents() -> None:
+    with pytest.raises(CorpusValidationError, match="documents must not be empty"):
+        EvaluationRunner(documents=[], queries=_valid_queries())
+
+
+@pytest.mark.parametrize("seed", [-1, True, "42", 1.5])
+def test_runner_rejects_invalid_seed(seed: object) -> None:
+    with pytest.raises(ConfigurationError, match="seed must be a non-negative integer"):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            seed=seed,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("cache_max_bytes", [0, -1024, True, "1024"])
+def test_runner_rejects_invalid_cache_max_bytes(cache_max_bytes: object) -> None:
+    with pytest.raises(
+        ConfigurationError, match="cache_max_bytes must be a positive integer"
+    ):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            cache_max_bytes=cache_max_bytes,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("queries", "expected"),
+    [
+        ({"q-1"}, "queries must be a sequence"),
+        ([], "queries must not be empty"),
+        (["q-1"], "queries must contain only EvaluationQuery"),
+    ],
+)
+def test_runner_rejects_invalid_query_collections(
+    queries: object, expected: str
+) -> None:
+    with pytest.raises(DatasetValidationError, match=expected):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=queries,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("strategies", "expected"),
+    [
+        ("keyword", "strategies must be a sequence of names"),
+        ([], "strategies must not be empty"),
+    ],
+)
+def test_runner_rejects_invalid_strategies(strategies: object, expected: str) -> None:
+    with pytest.raises(ConfigurationError, match=expected):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            strategies=strategies,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("retrievers", "expected"),
+    [
+        ("keyword", "retrievers must be a sequence"),
+        ([object()], "must contain only BaseRetriever"),
+    ],
+)
+def test_runner_rejects_invalid_retriever_collections(
+    retrievers: object, expected: str
+) -> None:
+    with pytest.raises(ConfigurationError, match=expected):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            retrievers=retrievers,  # type: ignore[arg-type]
+        )
+
+
+def test_runner_rejects_blank_retriever_name() -> None:
+    with pytest.raises(
+        ConfigurationError, match="retriever names must be non-empty strings"
+    ):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            retrievers=[_BlankNameRetriever()],
+        )
+
+
+def test_runner_rejects_duplicate_retriever_names() -> None:
+    with pytest.raises(ConfigurationError, match="retriever names must be unique"):
+        EvaluationRunner(
+            documents=_valid_documents(),
+            queries=_valid_queries(),
+            retrievers=[_CountingRetriever(), _CountingRetriever()],
+        )
