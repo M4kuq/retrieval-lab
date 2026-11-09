@@ -11,6 +11,7 @@ from retrieval_lab import (
     compare_retrievers_for_query,
     retrieval_metric_explanations,
 )
+from retrieval_lab.demo import DemoSearchHit
 from retrieval_lab.exceptions import EvaluationError, RetrieverContractError
 
 
@@ -120,6 +121,20 @@ def test_compare_rejects_invalid_top_k(top_k: object) -> None:
 def test_compare_requires_nonempty_retriever_sequence() -> None:
     with pytest.raises(EvaluationError, match="must not be empty"):
         compare_retrievers_for_query([], "query")
+
+
+@pytest.mark.parametrize("retrievers", ["stub", 42])
+def test_compare_rejects_non_sequence_retrievers(retrievers: object) -> None:
+    with pytest.raises(EvaluationError, match="must be a sequence"):
+        compare_retrievers_for_query(
+            retrievers,  # type: ignore[arg-type]
+            "query",
+        )
+
+
+def test_demo_search_hit_rejects_non_search_result() -> None:
+    with pytest.raises(RetrieverContractError, match="SearchResult"):
+        DemoSearchHit.from_result(object())  # type: ignore[arg-type]
 
 
 def test_compare_rejects_non_retriever_item() -> None:
