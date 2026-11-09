@@ -13,6 +13,11 @@ cut.
 
 ### Added
 
+- Benchmark loader: `load_beir_dataset()` reads a BEIR-format
+  directory (`corpus.jsonl`, `queries.jsonl`, `qrels/<split>.tsv`)
+  from disk into a `BenchmarkDataset` of native documents and an
+  `EvaluationDataset` with graded relevance; queries without positive
+  judgments in the split are reported as `excluded_query_ids`.
 - RAG quality metrics: `faithfulness()`, `context_precision()`, and
   `context_recall()` compute the RAGAS-style formulas from
   caller-supplied claim assessments (`ClaimAssessment`) and relevance

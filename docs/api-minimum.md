@@ -41,6 +41,10 @@ Datasets:
 - `RetrievedQueryResult`, `evaluate_results`
 - `load_documents`
 
+Benchmark loaders (offline; the benchmark must already be on disk):
+
+- `BenchmarkDataset`, `load_beir_dataset`
+
 Configuration:
 
 - `RetrievalConfig`, `ExperimentConfig`, `CorpusConfig`, `DatasetConfig`,

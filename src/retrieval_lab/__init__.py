@@ -27,6 +27,7 @@ from retrieval_lab.application import (
     validate_config_inputs,
 )
 from retrieval_lab.artifacts.results import load_result
+from retrieval_lab.benchmarks import BenchmarkDataset, load_beir_dataset
 from retrieval_lab.chunkers import FixedSizeChunker
 from retrieval_lab.comparison import (
     BootstrapDelta,
@@ -182,6 +183,7 @@ __all__ = [
     "BM25Retriever",
     "BM25RetrieverConfig",
     "BaseRetriever",
+    "BenchmarkDataset",
     "BootstrapDelta",
     "CallableGenerator",
     "CallableJudge",
@@ -303,6 +305,7 @@ __all__ = [
     "inspect_result",
     "judge_answer",
     "judge_answer_with_panel",
+    "load_beir_dataset",
     "load_config",
     "load_dataset_draft",
     "load_documents",
