@@ -621,9 +621,7 @@ def test_quality_gate_report_to_json_wraps_unserializable_state() -> None:
     )
     object.__setattr__(report, "candidate_run_id", object())
 
-    with pytest.raises(
-        EvaluationError, match="could not be serialized"
-    ) as exc_info:
+    with pytest.raises(EvaluationError, match="could not be serialized") as exc_info:
         report.to_json()
 
     assert isinstance(exc_info.value.__cause__, TypeError)
