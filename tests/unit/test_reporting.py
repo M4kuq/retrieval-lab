@@ -12,6 +12,8 @@ from retrieval_lab import (
     ComparabilityReport,
     EvaluationResult,
     LatencyStats,
+    MetricComparison,
+    MetricDelta,
     QueryEvaluation,
     RetrieverMetrics,
     RunComparison,
@@ -568,11 +570,13 @@ def test_comparison_html_shows_hand_calculated_deltas() -> None:
     ) in rendered
     improved_row = (
         "<tr class='improved'><td>keyword</td><td>q-2</td><td>recall</td>"
-        "<td>1</td><td>0</td><td>1</td><td>+1</td><td>improved</td></tr>"
+        "<td>1</td><td>0</td><td>1</td><td>+1</td><td></td>"
+        "<td>improved</td></tr>"
     )
     unchanged_row = (
         "<tr class='unchanged'><td>keyword</td><td>q-1</td><td>recall</td>"
-        "<td>1</td><td>1</td><td>1</td><td>+0</td><td>unchanged</td></tr>"
+        "<td>1</td><td>1</td><td>1</td><td>+0</td><td>+0%</td>"
+        "<td>unchanged</td></tr>"
     )
     assert improved_row in rendered
     assert unchanged_row in rendered
@@ -588,6 +592,7 @@ def test_comparison_html_escapes_run_ids() -> None:
     assert "base-&lt;script&gt;" in rendered
     assert "cand-&lt;script&gt;" in rendered
     assert "base-<script>" not in rendered
+    assert "cand-<script>" not in rendered
 
 
 def test_comparison_html_reports_blocking_issues_without_values() -> None:
@@ -621,6 +626,8 @@ def test_comparison_html_reports_blocking_issues_without_values() -> None:
     assert "<td>seed</td><td>experimental variable changed</td><td>no</td>" in rendered
     assert "/private/base.json" not in rendered
     assert "/private/cand.json" not in rendered
+    assert "<p>No metric changes.</p>" in rendered
+    assert "<p>No per-query metric changes.</p>" in rendered
 
 
 def test_comparison_save_html_round_trips(tmp_path: Path) -> None:
@@ -632,3 +639,189 @@ def test_comparison_save_html_round_trips(tmp_path: Path) -> None:
     comparison.save_html(path)
 
     assert path.read_text(encoding="utf-8") == comparison.to_html()
+
+
+def _delta(**overrides: object) -> MetricDelta:
+    values: dict[str, object] = {
+        "retriever": "keyword",
+        "metric": "recall",
+        "cutoff": 1,
+        "baseline": 1.0,
+        "candidate": 0.5,
+        "absolute_delta": -0.5,
+        "relative_delta": -0.5,
+        "relative_status": "defined",
+        "classification": "regressed",
+        "direction": "higher_is_better",
+    }
+    values.update(overrides)
+    return MetricDelta(**values)
+
+
+def _hand_comparison(
+    aggregate: MetricDelta,
+    query_deltas: tuple[MetricDelta, ...] = (),
+    **report_overrides: object,
+) -> RunComparison:
+    return RunComparison(
+        baseline_run_id="base",
+        candidate_run_id="cand",
+        comparability=ComparabilityReport(**report_overrides),
+        metrics={
+            aggregate.retriever: (
+                MetricComparison(
+                    retriever=aggregate.retriever,
+                    metric=aggregate.metric,
+                    cutoff=aggregate.cutoff,
+                    aggregate=aggregate,
+                    query_deltas=query_deltas,
+                ),
+            )
+        },
+    )
+
+
+def test_comparison_html_shows_regressed_rows() -> None:
+    baseline = _diff_result("baseline-run", {"q-1": 1.0})
+    candidate = _diff_result("candidate-run", {"q-1": 0.0})
+
+    rendered = compare_runs(baseline, candidate).to_html()
+
+    assert (
+        "<tr class='regressed'><td>keyword</td><td>recall</td><td>1</td>"
+        "<td>1</td><td>0</td><td>-1</td><td>-100%</td>"
+        "<td>regressed</td></tr>"
+    ) in rendered
+    assert (
+        "<tr class='regressed'><td>keyword</td><td>q-1</td><td>recall</td>"
+        "<td>1</td><td>1</td><td>0</td><td>-1</td><td>-100%</td>"
+        "<td>regressed</td></tr>"
+    ) in rendered
+
+
+def test_comparison_html_renders_none_cutoff() -> None:
+    aggregate = _delta(cutoff=None)
+    query = _delta(cutoff=None, query_id="q-1")
+
+    rendered = comparison_html(_hand_comparison(aggregate, (query,)))
+
+    assert (
+        "<tr class='regressed'><td>keyword</td><td>recall</td><td></td>"
+        "<td>1</td><td>0.5</td><td>-0.5</td><td>-50%</td>"
+        "<td>regressed</td></tr>"
+    ) in rendered
+    assert (
+        "<tr class='regressed'><td>keyword</td><td>q-1</td><td>recall</td>"
+        "<td></td><td>1</td><td>0.5</td><td>-0.5</td><td>-50%</td>"
+        "<td>regressed</td></tr>"
+    ) in rendered
+
+
+def test_comparison_html_normalizes_negative_zero() -> None:
+    aggregate = _delta(
+        baseline=-0.0,
+        candidate=0.0,
+        absolute_delta=-0.0,
+        relative_delta=-0.0,
+        classification="unchanged",
+    )
+
+    rendered = comparison_html(_hand_comparison(aggregate))
+
+    assert "<td>0</td><td>0</td><td>+0</td><td>+0%</td>" in rendered
+    assert "-0" not in rendered
+
+
+def test_comparison_html_renders_diagnostics() -> None:
+    comparison = _hand_comparison(
+        _delta(),
+        diagnostics=(
+            ComparabilityIssue(
+                field="latency",
+                reason="presence differs",
+                blocking=False,
+            ),
+        ),
+    )
+
+    rendered = comparison_html(comparison)
+
+    assert "<td>latency</td><td>presence differs</td><td>no</td>" in rendered
+
+
+def test_comparison_html_escapes_all_text_fields() -> None:
+    aggregate = _delta(retriever="ret-<script>", metric="met-<script>")
+    query = _delta(
+        retriever="ret-<script>",
+        metric="met-<script>",
+        query_id="q-<script>",
+    )
+    comparison = _hand_comparison(
+        aggregate,
+        (query,),
+        issues=(
+            ComparabilityIssue(
+                field="fld-<script>",
+                reason="rsn-<script>",
+            ),
+        ),
+    )
+
+    rendered = comparison_html(comparison)
+
+    for raw in (
+        "ret-<script>",
+        "met-<script>",
+        "q-<script>",
+        "fld-<script>",
+        "rsn-<script>",
+    ):
+        assert raw not in rendered
+    for escaped in (
+        "ret-&lt;script&gt;",
+        "met-&lt;script&gt;",
+        "q-&lt;script&gt;",
+        "fld-&lt;script&gt;",
+        "rsn-&lt;script&gt;",
+    ):
+        assert escaped in rendered
+
+
+def test_comparison_html_sorts_retrievers() -> None:
+    zeta = MetricComparison(
+        retriever="zeta",
+        metric="recall",
+        cutoff=1,
+        aggregate=_delta(retriever="zeta"),
+    )
+    alpha = MetricComparison(
+        retriever="alpha",
+        metric="recall",
+        cutoff=1,
+        aggregate=_delta(retriever="alpha"),
+    )
+    comparison = RunComparison(
+        baseline_run_id="base",
+        candidate_run_id="cand",
+        comparability=ComparabilityReport(),
+        metrics={"zeta": (zeta,), "alpha": (alpha,)},
+    )
+
+    rendered = comparison_html(comparison)
+
+    assert rendered.index("<td>alpha</td>") < rendered.index("<td>zeta</td>")
+
+
+def test_comparison_save_html_is_atomic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    comparison = _hand_comparison(_delta())
+
+    def fail_replace(source: object, destination: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(result_artifacts.os, "replace", fail_replace)
+    with pytest.raises(EvaluationError, match="atomically"):
+        comparison.save_html(tmp_path / "atomic" / "diff.html")
+    assert not list((tmp_path / "atomic").glob(".*.tmp"))

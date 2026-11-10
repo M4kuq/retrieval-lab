@@ -5,10 +5,13 @@ from __future__ import annotations
 import html
 import json
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
-from retrieval_lab.comparison import MetricDelta, RunComparison
 from retrieval_lab.domain.results import EvaluationResult
 from retrieval_lab.reporting._safety import safe_identifier
+
+if TYPE_CHECKING:
+    from retrieval_lab.comparison import MetricDelta, RunComparison
 
 
 def _escape(value: object) -> str:
@@ -268,11 +271,14 @@ def result_html(result: EvaluationResult) -> str:
 
 def _delta_cells(delta: MetricDelta) -> str:
     relative = (
-        "" if delta.relative_delta is None else f"{delta.relative_delta * 100:+.12g}%"
+        ""
+        if delta.relative_delta is None
+        else f"{delta.relative_delta * 100 + 0.0:+.12g}%"
     )
     return (
-        f"<td>{delta.baseline:.12g}</td><td>{delta.candidate:.12g}</td>"
-        f"<td>{delta.absolute_delta:+.12g}</td><td>{_escape(relative)}</td>"
+        f"<td>{delta.baseline + 0.0:.12g}</td>"
+        f"<td>{delta.candidate + 0.0:.12g}</td>"
+        f"<td>{delta.absolute_delta + 0.0:+.12g}</td><td>{_escape(relative)}</td>"
         f"<td>{_escape(delta.classification)}</td>"
     )
 
@@ -282,12 +288,13 @@ def comparison_html(comparison: RunComparison) -> str:
 
     report = comparison.comparability
     issue_rows: list[str] = []
-    for issues, blocking in (
-        (report.issues, "yes"),
-        (report.variable_differences, "no"),
-        (report.diagnostics, "no"),
+    for issues in (
+        report.issues,
+        report.variable_differences,
+        report.diagnostics,
     ):
         for issue in issues:
+            blocking = "yes" if issue.blocking else "no"
             issue_rows.append(
                 f"<tr><td>{_escape(issue.field)}</td>"
                 f"<td>{_escape(issue.reason)}</td><td>{blocking}</td></tr>"
@@ -307,7 +314,8 @@ def comparison_html(comparison: RunComparison) -> str:
             aggregate_rows.append(
                 f"<tr class='{_escape(aggregate.classification)}'>"
                 f"<td>{_escape(safe_identifier(name))}</td>"
-                f"<td>{_escape(aggregate.metric)}</td><td>{cutoff}</td>"
+                f"<td>{_escape(safe_identifier(aggregate.metric))}</td>"
+                f"<td>{cutoff}</td>"
                 f"{_delta_cells(aggregate)}</tr>"
             )
             for delta in metric_comparison.query_deltas:
@@ -316,13 +324,30 @@ def comparison_html(comparison: RunComparison) -> str:
                     f"<tr class='{_escape(delta.classification)}'>"
                     f"<td>{_escape(safe_identifier(name))}</td>"
                     f"<td>{_escape(safe_identifier(delta.query_id or ''))}</td>"
-                    f"<td>{_escape(delta.metric)}</td><td>{query_cutoff}</td>"
-                    f"<td>{delta.baseline:.12g}</td>"
-                    f"<td>{delta.candidate:.12g}</td>"
-                    f"<td>{delta.absolute_delta:+.12g}</td>"
-                    f"<td>{_escape(delta.classification)}</td></tr>"
+                    f"<td>{_escape(safe_identifier(delta.metric))}</td>"
+                    f"<td>{query_cutoff}</td>"
+                    f"{_delta_cells(delta)}</tr>"
                 )
     comparable = "yes" if report.comparable else "no"
+    aggregate_html = (
+        "<table><thead><tr>"
+        "<th>Retriever</th><th>Metric</th><th>Cutoff</th><th>Baseline</th>"
+        "<th>Candidate</th><th>Absolute delta</th><th>Relative delta</th>"
+        f"<th>Change</th></tr></thead><tbody>{''.join(aggregate_rows)}</tbody>"
+        "</table>"
+        if aggregate_rows
+        else "<p>No metric changes.</p>"
+    )
+    query_html = (
+        "<table><thead><tr>"
+        "<th>Retriever</th><th>Query ID</th><th>Metric</th><th>Cutoff</th>"
+        "<th>Baseline</th><th>Candidate</th><th>Absolute delta</th>"
+        "<th>Relative delta</th>"
+        f"<th>Change</th></tr></thead><tbody>{''.join(query_rows)}</tbody>"
+        "</table>"
+        if query_rows
+        else "<p>No per-query metric changes.</p>"
+    )
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<title>Retrieval Lab run comparison</title><style>"
@@ -339,16 +364,8 @@ def comparison_html(comparison: RunComparison) -> str:
         f"{_escape(safe_identifier(comparison.candidate_run_id))}</p>"
         f"<section><h2>Comparability</h2><p>Comparable: {comparable}</p>"
         f"{issues_html}</section>"
-        "<section><h2>Aggregate metric changes</h2><table><thead><tr>"
-        "<th>Retriever</th><th>Metric</th><th>Cutoff</th><th>Baseline</th>"
-        "<th>Candidate</th><th>Absolute delta</th><th>Relative delta</th>"
-        f"<th>Change</th></tr></thead><tbody>{''.join(aggregate_rows)}</tbody>"
-        "</table></section>"
-        "<section><h2>Per-query metric changes</h2><table><thead><tr>"
-        "<th>Retriever</th><th>Query ID</th><th>Metric</th><th>Cutoff</th>"
-        "<th>Baseline</th><th>Candidate</th><th>Absolute delta</th>"
-        f"<th>Change</th></tr></thead><tbody>{''.join(query_rows)}</tbody>"
-        "</table></section>"
+        f"<section><h2>Aggregate metric changes</h2>{aggregate_html}</section>"
+        f"<section><h2>Per-query metric changes</h2>{query_html}</section>"
         "</body></html>\n"
     )
 
