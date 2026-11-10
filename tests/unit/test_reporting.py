@@ -728,7 +728,7 @@ def test_comparison_html_normalizes_negative_zero() -> None:
 
     rendered = comparison_html(_hand_comparison(aggregate))
 
-    row = next(line for line in rendered.splitlines() if "unchanged" in line)
+    row = rendered.split("<tr class='unchanged'>")[1].split("</tr>")[0]
     assert "<td>0</td><td>0</td><td>+0</td><td>+0%</td>" in row
     assert "-0" not in row
 
