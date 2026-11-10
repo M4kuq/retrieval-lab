@@ -13,6 +13,11 @@ cut.
 
 ### Added
 
+- Run diff report: `RunComparison.to_html()` / `save_html(path)` (and
+  `comparison_html()` in `retrieval_lab.reporting`) render a standalone
+  escaped HTML report of a two-run comparison, with comparability
+  differences, aggregate metric changes, and per-query metric changes
+  classified as improved, regressed, or unchanged.
 - Evaluation checkpoints: `EvaluationCheckpoint` records each query's
   ranking to a fingerprint-pinned JSONL file (flushed and fsynced per
   record, torn final lines from a crash are dropped on reopen), and

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -332,6 +333,20 @@ class RunComparison:
     def comparisons(self) -> Mapping[str, tuple[MetricComparison, ...]]:
         """Return per-retriever metric comparisons."""
         return self.metrics
+
+    def to_html(self) -> str:
+        """Return a standalone escaped HTML diff report with no external resources."""
+
+        from retrieval_lab.reporting.html import comparison_html
+
+        return comparison_html(self)
+
+    def save_html(self, path: str | os.PathLike[str]) -> None:
+        """Atomically save a standalone UTF-8 HTML diff report."""
+
+        from retrieval_lab.artifacts.results import _atomic_write_text
+
+        _atomic_write_text(path, self.to_html())
 
 
 def _manifest_value(result: EvaluationResult, field: str) -> object:

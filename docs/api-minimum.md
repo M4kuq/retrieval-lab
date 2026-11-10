@@ -437,6 +437,12 @@ tuple when dataset hash, query IDs, relevance level, metric version, top-k, or
 metric shapes are incompatible. Retriever, corpus, chunk, configuration, seed,
 run identity, timestamp, and latency-presence differences are reported as
 experimental differences; only common retrievers receive metric deltas.
+`RunComparison.to_html()` and `save_html(path)` render the comparison as a
+standalone escaped HTML diff report: comparability differences (field and
+reason only, never manifest values), aggregate metric changes, and per-query
+metric changes with baseline, candidate, absolute and relative deltas, and the
+improved/regressed/unchanged classification. `comparison_html()` is the
+equivalent function in `retrieval_lab.reporting`.
 
 `summary()` returns deterministic plain text and never prints. `to_summary_csv()`
 and `to_per_query_csv()` return UTF-8 long-form CSV; the corresponding save
