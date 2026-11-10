@@ -58,6 +58,12 @@ corpus or an index.
 - `evaluate_results` — Evaluate existing document rankings using Retrieval Lab's core metrics.
 - `load_documents` — Load supported local documents in deterministic source-path order.
 
+## Hybrid fusion of precomputed rankings
+
+- `fuse_rankings` — Fuse named identifier rankings with reciprocal-rank fusion.
+- `fuse_results` — Fuse per-query rankings from two or more named sources.
+- `evaluate_fused_results` — Evaluate the RRF fusion of precomputed rankings as its own run.
+
 ## Configuration
 
 Typed records behind the schema-versioned YAML configuration.
