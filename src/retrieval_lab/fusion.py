@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from fractions import Fraction
 
 from retrieval_lab.datasets import EvaluationDataset
-from retrieval_lab.domain import EvaluationResult
+from retrieval_lab.domain import EvaluationResult, JSONValue
+from retrieval_lab.evaluation.engine import content_hash
 from retrieval_lab.evaluation.precomputed import RetrievedQueryResult, evaluate_results
 from retrieval_lab.exceptions import (
-    ConfigurationError,
     DatasetValidationError,
     RetrieverContractError,
 )
@@ -23,21 +24,12 @@ def fuse_rankings(
     """Fuse named identifier rankings with reciprocal-rank fusion.
 
     Each identifier scores the sum of ``1 / (rrf_k + rank)`` over the rankings
-    containing it, using one-based ranks. Sources accumulate in sorted-name
-    order and ties break by identifier, matching ``HybridRetriever``.
+    containing it, using one-based ranks. Scores are summed exactly, so
+    mathematically equal scores always tie-break by identifier, matching
+    ``HybridRetriever``.
     """
 
-    normalized_k = _validate_rrf_k(rrf_k)
-    normalized = _validate_rankings(rankings)
-    scores: dict[str, float] = {}
-    for name in sorted(normalized):
-        for rank, identifier in enumerate(normalized[name], start=1):
-            scores[identifier] = scores.get(identifier, 0.0) + 1.0 / (
-                normalized_k + rank
-            )
-    return tuple(
-        sorted(scores, key=lambda identifier: (-scores[identifier], identifier))
-    )
+    return _fuse_validated(_validate_rankings(rankings), _validate_rrf_k(rrf_k))
 
 
 def fuse_results(
@@ -53,18 +45,16 @@ def fuse_results(
 
     normalized_k = _validate_rrf_k(rrf_k)
     by_query = _validate_results(results)
+    query_ids = sorted(by_query[next(iter(by_query))])
     return tuple(
         RetrievedQueryResult(
             query_id=query_id,
-            retrieved_document_ids=fuse_rankings(
-                {
-                    name: rankings[query_id]
-                    for name, rankings in sorted(by_query.items())
-                },
-                rrf_k=normalized_k,
+            retrieved_document_ids=_fuse_validated(
+                {name: rankings[query_id] for name, rankings in by_query.items()},
+                normalized_k,
             ),
         )
-        for query_id in sorted(by_query[next(iter(by_query))])
+        for query_id in query_ids
     )
 
 
@@ -79,23 +69,56 @@ def evaluate_fused_results(
     """Evaluate the RRF fusion of precomputed rankings as its own run.
 
     The fused rankings are evaluated with the same metrics, dataset hash, and
-    manifest contract as ``evaluate_results``, so the returned run is a
-    first-class ``EvaluationResult``: it can be saved, reported, gated, and
-    diffed with ``compare_runs`` against other fused runs, for example across
-    ``rrf_k`` values or source sets.
+    manifest contract as ``evaluate_results``; the manifest additionally
+    records the fusion provenance (``rrf_k`` and the sorted source names) and
+    the run identity covers it, so fused runs across ``rrf_k`` values or
+    source sets stay distinct and can be diffed with ``compare_runs``.
     """
 
-    return evaluate_results(
+    fused = fuse_results(results, rrf_k=rrf_k)
+    result = evaluate_results(
         dataset=dataset,
-        retrieved_results=fuse_results(results, rrf_k=rrf_k),
+        retrieved_results=fused,
         top_k=top_k,
         name=name,
+    )
+    source_names: list[JSONValue] = list(sorted(results))
+    fusion: dict[str, JSONValue] = {"rrf_k": rrf_k, "sources": source_names}
+    manifest: dict[str, JSONValue] = {**result.manifest, "fusion": fusion}
+    payload = {
+        key: value
+        for key, value in manifest.items()
+        if key not in ("query_count", "query_ids")
+    }
+    return EvaluationResult(
+        run_id=content_hash(payload),
+        metrics=result.metrics,
+        query_results=result.query_results,
+        manifest=manifest,
+        schema_version=result.schema_version,
+        latency=result.latency or None,
+        quality_gates=result.quality_gates or None,
+    )
+
+
+def _fuse_validated(
+    rankings: Mapping[str, tuple[str, ...]],
+    rrf_k: int,
+) -> tuple[str, ...]:
+    scores: dict[str, Fraction] = {}
+    for name in sorted(rankings):
+        for rank, identifier in enumerate(rankings[name], start=1):
+            scores[identifier] = scores.get(identifier, Fraction(0)) + Fraction(
+                1, rrf_k + rank
+            )
+    return tuple(
+        sorted(scores, key=lambda identifier: (-scores[identifier], identifier))
     )
 
 
 def _validate_rrf_k(rrf_k: int) -> int:
     if isinstance(rrf_k, bool) or not isinstance(rrf_k, int) or rrf_k <= 0:
-        raise ConfigurationError("rrf_k must be a positive integer")
+        raise RetrieverContractError("rrf_k must be a positive integer")
     return rrf_k
 
 
@@ -110,9 +133,13 @@ def _validate_rankings(
     for name, ranking in rankings.items():
         if not isinstance(name, str) or not name.strip():
             raise DatasetValidationError("rankings source names must be non-empty")
-        if isinstance(ranking, (str, bytes)) or not isinstance(ranking, Sequence):
+        if isinstance(ranking, (str, bytes)):
             raise RetrieverContractError(
                 f"rankings[{name!r}] must be a sequence of identifiers, not a string"
+            )
+        if not isinstance(ranking, Sequence):
+            raise RetrieverContractError(
+                f"rankings[{name!r}] must be a sequence of identifiers"
             )
         identifiers = tuple(ranking)
         if any(
