@@ -8,13 +8,18 @@ import pytest
 
 import retrieval_lab.artifacts.results as result_artifacts
 from retrieval_lab import (
+    ComparabilityIssue,
+    ComparabilityReport,
     EvaluationResult,
     LatencyStats,
     QueryEvaluation,
     RetrieverMetrics,
+    RunComparison,
+    compare_runs,
     load_result,
 )
 from retrieval_lab.exceptions import EvaluationError
+from retrieval_lab.reporting import comparison_html
 from retrieval_lab.reporting._safety import safe_identifier
 from retrieval_lab.reporting.html import _config_view
 
@@ -512,3 +517,118 @@ def test_all_report_saves_are_atomic_and_create_parents(
     with pytest.raises(EvaluationError, match="saved"):
         result.save_json(tmp_path / "atomic" / "result.json")
     assert not list((tmp_path / "atomic").glob(".*.tmp"))
+
+
+def _diff_result(run_id: str, values: dict[str, float]) -> EvaluationResult:
+    queries = tuple(
+        QueryEvaluation(
+            query_id=query_id,
+            retrieved_ids=("doc-1",),
+            metrics_by_cutoff={1: {"recall": value}},
+        )
+        for query_id, value in values.items()
+    )
+    return EvaluationResult(
+        run_id=run_id,
+        metrics={
+            "keyword": RetrieverMetrics(
+                {1: {"recall": sum(values.values()) / len(values)}}
+            )
+        },
+        query_results={"keyword": queries},
+        latency=None,
+        manifest={
+            "dataset_hash": "d" * 64,
+            "query_ids": sorted(values),
+            "relevance_level": "document",
+            "top_k": [1],
+            "metric_version": 1,
+        },
+    )
+
+
+def test_comparison_html_shows_hand_calculated_deltas() -> None:
+    baseline = _diff_result("baseline-run", {"q-1": 1.0, "q-2": 0.0})
+    candidate = _diff_result("candidate-run", {"q-1": 1.0, "q-2": 1.0})
+    comparison = compare_runs(baseline, candidate)
+
+    rendered = comparison_html(comparison)
+
+    assert rendered == comparison.to_html()
+    assert "Baseline run ID: baseline-run" in rendered
+    assert "Candidate run ID: candidate-run" in rendered
+    assert "Comparable: yes" in rendered
+    assert (
+        "<td>run_id</td><td>experimental variable differs</td><td>no</td>" in rendered
+    )
+    assert (
+        "<tr class='improved'><td>keyword</td><td>recall</td><td>1</td>"
+        "<td>0.5</td><td>1</td><td>+0.5</td><td>+100%</td>"
+        "<td>improved</td></tr>"
+    ) in rendered
+    improved_row = (
+        "<tr class='improved'><td>keyword</td><td>q-2</td><td>recall</td>"
+        "<td>1</td><td>0</td><td>1</td><td>+1</td><td>improved</td></tr>"
+    )
+    unchanged_row = (
+        "<tr class='unchanged'><td>keyword</td><td>q-1</td><td>recall</td>"
+        "<td>1</td><td>1</td><td>1</td><td>+0</td><td>unchanged</td></tr>"
+    )
+    assert improved_row in rendered
+    assert unchanged_row in rendered
+    assert rendered.index(improved_row) < rendered.index(unchanged_row)
+
+
+def test_comparison_html_escapes_run_ids() -> None:
+    baseline = _diff_result("base-<script>", {"q-1": 0.0})
+    candidate = _diff_result("cand-<script>", {"q-1": 1.0})
+
+    rendered = compare_runs(baseline, candidate).to_html()
+
+    assert "base-&lt;script&gt;" in rendered
+    assert "cand-&lt;script&gt;" in rendered
+    assert "base-<script>" not in rendered
+
+
+def test_comparison_html_reports_blocking_issues_without_values() -> None:
+    comparison = RunComparison(
+        baseline_run_id="base",
+        candidate_run_id="cand",
+        comparability=ComparabilityReport(
+            issues=(
+                ComparabilityIssue(
+                    field="dataset_hash",
+                    reason="values differ",
+                    baseline_value="/private/base.json",
+                    candidate_value="/private/cand.json",
+                ),
+            ),
+            variable_differences=(
+                ComparabilityIssue(
+                    field="seed",
+                    reason="experimental variable changed",
+                    blocking=False,
+                ),
+            ),
+        ),
+        metrics={},
+    )
+
+    rendered = comparison_html(comparison)
+
+    assert "Comparable: no" in rendered
+    assert "<td>dataset_hash</td><td>values differ</td><td>yes</td>" in rendered
+    assert "<td>seed</td><td>experimental variable changed</td><td>no</td>" in rendered
+    assert "/private/base.json" not in rendered
+    assert "/private/cand.json" not in rendered
+
+
+def test_comparison_save_html_round_trips(tmp_path: Path) -> None:
+    baseline = _diff_result("baseline-run", {"q-1": 0.0})
+    candidate = _diff_result("candidate-run", {"q-1": 1.0})
+    comparison = compare_runs(baseline, candidate)
+
+    path = tmp_path / "nested" / "diff.html"
+    comparison.save_html(path)
+
+    assert path.read_text(encoding="utf-8") == comparison.to_html()

@@ -6,6 +6,7 @@ import html
 import json
 from collections.abc import Mapping
 
+from retrieval_lab.comparison import MetricDelta, RunComparison
 from retrieval_lab.domain.results import EvaluationResult
 from retrieval_lab.reporting._safety import safe_identifier
 
@@ -265,4 +266,91 @@ def result_html(result: EvaluationResult) -> str:
     )
 
 
-__all__ = ["result_html"]
+def _delta_cells(delta: MetricDelta) -> str:
+    relative = (
+        "" if delta.relative_delta is None else f"{delta.relative_delta * 100:+.12g}%"
+    )
+    return (
+        f"<td>{delta.baseline:.12g}</td><td>{delta.candidate:.12g}</td>"
+        f"<td>{delta.absolute_delta:+.12g}</td><td>{_escape(relative)}</td>"
+        f"<td>{_escape(delta.classification)}</td>"
+    )
+
+
+def comparison_html(comparison: RunComparison) -> str:
+    """Render aggregate and per-query metric deltas between two runs."""
+
+    report = comparison.comparability
+    issue_rows: list[str] = []
+    for issues, blocking in (
+        (report.issues, "yes"),
+        (report.variable_differences, "no"),
+        (report.diagnostics, "no"),
+    ):
+        for issue in issues:
+            issue_rows.append(
+                f"<tr><td>{_escape(issue.field)}</td>"
+                f"<td>{_escape(issue.reason)}</td><td>{blocking}</td></tr>"
+            )
+    issues_html = (
+        "<table><thead><tr><th>Field</th><th>Reason</th><th>Blocking</th>"
+        f"</tr></thead><tbody>{''.join(issue_rows)}</tbody></table>"
+        if issue_rows
+        else "<p>No comparability differences.</p>"
+    )
+    aggregate_rows: list[str] = []
+    query_rows: list[str] = []
+    for name in sorted(comparison.metrics):
+        for metric_comparison in comparison.metrics[name]:
+            aggregate = metric_comparison.aggregate
+            cutoff = "" if aggregate.cutoff is None else str(aggregate.cutoff)
+            aggregate_rows.append(
+                f"<tr class='{_escape(aggregate.classification)}'>"
+                f"<td>{_escape(safe_identifier(name))}</td>"
+                f"<td>{_escape(aggregate.metric)}</td><td>{cutoff}</td>"
+                f"{_delta_cells(aggregate)}</tr>"
+            )
+            for delta in metric_comparison.query_deltas:
+                query_cutoff = "" if delta.cutoff is None else str(delta.cutoff)
+                query_rows.append(
+                    f"<tr class='{_escape(delta.classification)}'>"
+                    f"<td>{_escape(safe_identifier(name))}</td>"
+                    f"<td>{_escape(safe_identifier(delta.query_id or ''))}</td>"
+                    f"<td>{_escape(delta.metric)}</td><td>{query_cutoff}</td>"
+                    f"<td>{delta.baseline:.12g}</td>"
+                    f"<td>{delta.candidate:.12g}</td>"
+                    f"<td>{delta.absolute_delta:+.12g}</td>"
+                    f"<td>{_escape(delta.classification)}</td></tr>"
+                )
+    comparable = "yes" if report.comparable else "no"
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<title>Retrieval Lab run comparison</title><style>"
+        "body{font-family:system-ui,sans-serif;max-width:1100px;"
+        "margin:2rem auto;padding:0 1rem}"
+        "table{border-collapse:collapse;width:100%;margin:1rem 0}"
+        "th,td{border:1px solid #ccc;padding:.35rem;text-align:left}"
+        ".improved{background:#e6f4ea}.regressed{background:#fdecea}"
+        "</style></head><body>"
+        "<h1>Retrieval Lab run comparison</h1>"
+        f"<p>Baseline run ID: "
+        f"{_escape(safe_identifier(comparison.baseline_run_id))}</p>"
+        f"<p>Candidate run ID: "
+        f"{_escape(safe_identifier(comparison.candidate_run_id))}</p>"
+        f"<section><h2>Comparability</h2><p>Comparable: {comparable}</p>"
+        f"{issues_html}</section>"
+        "<section><h2>Aggregate metric changes</h2><table><thead><tr>"
+        "<th>Retriever</th><th>Metric</th><th>Cutoff</th><th>Baseline</th>"
+        "<th>Candidate</th><th>Absolute delta</th><th>Relative delta</th>"
+        f"<th>Change</th></tr></thead><tbody>{''.join(aggregate_rows)}</tbody>"
+        "</table></section>"
+        "<section><h2>Per-query metric changes</h2><table><thead><tr>"
+        "<th>Retriever</th><th>Query ID</th><th>Metric</th><th>Cutoff</th>"
+        "<th>Baseline</th><th>Candidate</th><th>Absolute delta</th>"
+        f"<th>Change</th></tr></thead><tbody>{''.join(query_rows)}</tbody>"
+        "</table></section>"
+        "</body></html>\n"
+    )
+
+
+__all__ = ["comparison_html", "result_html"]
