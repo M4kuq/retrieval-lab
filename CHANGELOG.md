@@ -28,6 +28,13 @@ cut.
   from disk into a `BenchmarkDataset` of native documents and an
   `EvaluationDataset` with graded relevance; queries without positive
   judgments in the split are reported as `excluded_query_ids`.
+- Benchmark loaders: `load_msmarco_dataset()` reads an MS MARCO
+  passage-ranking directory (`collection.tsv`, `queries.<split>.tsv`,
+  `qrels.<split>.tsv` in TREC format), and
+  `load_natural_questions_dataset()` reads a simplified Natural
+  Questions JSONL file, turning each example's page into a corpus
+  document and its long-answer annotation into a grade-1 judgment;
+  unjudged queries are reported as `excluded_query_ids`.
 - RAG quality metrics: `faithfulness()`, `context_precision()`, and
   `context_recall()` compute the RAGAS-style formulas from
   caller-supplied claim assessments (`ClaimAssessment`) and relevance

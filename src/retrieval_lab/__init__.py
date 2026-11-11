@@ -27,7 +27,12 @@ from retrieval_lab.application import (
     validate_config_inputs,
 )
 from retrieval_lab.artifacts.results import load_result
-from retrieval_lab.benchmarks import BenchmarkDataset, load_beir_dataset
+from retrieval_lab.benchmarks import (
+    BenchmarkDataset,
+    load_beir_dataset,
+    load_msmarco_dataset,
+    load_natural_questions_dataset,
+)
 from retrieval_lab.checkpointing import EvaluationCheckpoint, run_with_checkpoint
 from retrieval_lab.chunkers import FixedSizeChunker
 from retrieval_lab.comparison import (
@@ -315,6 +320,8 @@ __all__ = [
     "load_config",
     "load_dataset_draft",
     "load_documents",
+    "load_msmarco_dataset",
+    "load_natural_questions_dataset",
     "load_result",
     "mark_draft_in_review",
     "mark_draft_reviewed",

@@ -43,7 +43,8 @@ Datasets:
 
 Benchmark loaders (offline; the benchmark must already be on disk):
 
-- `BenchmarkDataset`, `load_beir_dataset`
+- `BenchmarkDataset`, `load_beir_dataset`, `load_msmarco_dataset`,
+  `load_natural_questions_dataset`
 
 Hybrid fusion of precomputed rankings:
 

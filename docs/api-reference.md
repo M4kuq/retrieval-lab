@@ -172,6 +172,8 @@ records; downloading stays with the caller.
 
 - `BenchmarkDataset` — A loaded benchmark: its corpus documents and evaluation dataset.
 - `load_beir_dataset` — Load a BEIR-format dataset directory from disk.
+- `load_msmarco_dataset` — Load an MS MARCO passage-ranking dataset directory from disk.
+- `load_natural_questions_dataset` — Load a simplified Natural Questions JSONL file from disk.
 
 ## RAG quality metrics
 
