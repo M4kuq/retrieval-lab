@@ -61,6 +61,14 @@ def test_release_metadata_and_manifest_are_explicit() -> None:
     assert "recursive-include tools *.py" in manifest
 
 
+def test_readme_install_guidance_uses_the_distribution_name() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "pip install retrieval-lab-sdk" in readme
+    assert "pip install 'retrieval-lab-sdk[dense]'" in readme
+    assert "retrieval-lab[" not in readme
+    assert 'retrieval-lab"' not in readme
+
+
 def test_index_python_snippets_run() -> None:
     text = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
     blocks = re.findall(r"```python\n(.*?)```", text, flags=re.DOTALL)

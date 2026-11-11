@@ -3,10 +3,12 @@
 Retrieval Lab is a local-first Python toolkit for comparing and regression-testing
 RAG retrieval strategies on your own corpus.
 
-The project is currently pre-alpha. The supported local pipeline loads TXT,
-Markdown, and JSONL, validates graded relevance data, and compares deterministic
-Keyword, BM25, Dense, and RRF Hybrid retrieval without network access or paid
-services. Exact dense retrieval is available as an optional extra.
+The project is in alpha. Install the distribution package
+`retrieval-lab-sdk` (`pip install retrieval-lab-sdk`); the import package is
+`retrieval_lab`. The supported local pipeline loads TXT, Markdown, and JSONL,
+validates graded relevance data, and compares deterministic Keyword, BM25,
+Dense, and RRF Hybrid retrieval without network access or paid services.
+Exact dense retrieval is available as an optional extra.
 
 ## Quick start
 
@@ -106,7 +108,11 @@ comparison = compare_runs(
 
 Comparisons require matching dataset/query/relevance/metric/top-k contracts and
 report retriever, corpus, chunk, configuration, and latency differences
-separately.
+separately. A comparison can also be rendered as a standalone HTML diff report
+with `comparison.to_html()` or saved with `comparison.save_html(path)`.
+`bootstrap_metric_delta()` resamples the paired per-query deltas of a metric
+comparison and reports a bootstrap confidence interval, a two-sided p-value,
+and a significance flag, deterministically under a caller seed.
 
 To evaluate a synchronous search callable directly, return `RetrievedItem`
 records in the provider's best-first order:
@@ -167,7 +173,7 @@ after child tasks are cleaned up.
 Install the optional dependency when you want multilingual E5 dense retrieval:
 
 ```bash
-pip install 'retrieval-lab[dense]'
+pip install 'retrieval-lab-sdk[dense]'
 ```
 
 `DenseRetriever` uses `intfloat/multilingual-e5-small` by default and lazily
@@ -277,11 +283,58 @@ injection protection. HTML is a standalone UTF-8 document with inline CSS only;
 it shows metrics, latency, warnings, and a safe allowlist of normalized config
 fields. All save methods use atomic same-directory replacement.
 
+## Benchmark datasets
+
+Standard benchmark layouts load from disk into the native dataset models:
+
+- `load_beir_dataset()` reads a BEIR-format directory (`corpus.jsonl`,
+  `queries.jsonl`, `qrels/<split>.tsv`).
+- `load_msmarco_dataset()` reads an MS MARCO passage-ranking directory
+  (`collection.tsv`, `queries.<split>.tsv`, TREC-format `qrels.<split>.tsv`).
+- `load_natural_questions_dataset()` reads a simplified Natural Questions
+  JSONL file, using each example's page as a corpus document and its
+  long-answer annotation as a grade-1 judgment.
+
+Queries without positive judgments in the split are reported as
+`excluded_query_ids` instead of being silently dropped.
+
+## Evaluation-side fusion
+
+`fuse_rankings()` and `fuse_results()` combine saved rankings from several
+retrievers with reciprocal-rank fusion, using exact rational arithmetic and
+identifier tie-breaking. `evaluate_fused_results()` scores the fused ranking
+through the shared metric engine and records the fusion parameters in the
+result manifest, so a hybrid strategy can be regression-tested from saved
+runs without re-running retrieval.
+
+## Checkpoints for large evaluations
+
+`run_with_checkpoint()` records each finished query's ranking to a
+fingerprint-pinned JSONL checkpoint (`EvaluationCheckpoint`), flushed and
+fsynced per record. Re-running after an interruption evaluates only the
+queries still missing, so long evaluations over large corpora can resume
+instead of starting over.
+
+## Answer evaluation and judges
+
+Generated answers can be scored without any provider dependency:
+`evaluate_answer()` and `evaluate_answers()` compute deterministic
+`exact_match` and `token_f1`, answers come from a caller-supplied
+`CallableGenerator`, and `evaluate_rag_answer()` bundles the RAGAS-style
+`faithfulness()`, `context_precision()`, and `context_recall()` formulas over
+caller-supplied claim assessments. `judge_answer()` and
+`judge_answer_with_panel()` run caller-controlled LLM judges through a
+validated prompt template and return typed verdicts with per-judge usage
+records; no provider client is bundled.
+
 ## Scope
 
-v0.1 focuses on retrieval evaluation and local JSON/CSV/standalone HTML reports.
-CLI commands and CI regression gates remain under development. Answer generation
-and LLM-based judging are planned only after retrieval evaluation is stable.
+Retrieval evaluation is the core: local-first, deterministic, and usable
+without network access, paid APIs, or heavyweight ML dependencies. The CLI is
+a thin adapter over the public Python API and supports project scaffolding,
+validation, configured runs, inspection, comparison, and quality gates for CI
+regression checks. Answer evaluation and judging stay provider-independent —
+callers supply the generator, the claim assessments, and the judges.
 
 See `docs/product-plan.md` and `docs/technical-design.md` for the full roadmap and
 contracts.
