@@ -6,6 +6,7 @@ import argparse
 import sys
 import traceback
 from collections.abc import Sequence
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from retrieval_lab import (
@@ -28,12 +29,24 @@ from retrieval_lab import (
 from retrieval_lab.cli.dataset import configure_dataset_parser, run_dataset_command
 
 
+def _distribution_version() -> str:
+    try:
+        return importlib_metadata.version("retrieval-lab-sdk")
+    except importlib_metadata.PackageNotFoundError:
+        return "0.1.0rc1"
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the parser without reading files or executing an experiment."""
 
     parser = argparse.ArgumentParser(
         prog="retrieval-lab",
         description="Run offline Retrieval Lab retrieval evaluations.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_distribution_version()}",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,24 @@ def test_help_is_available(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--help"])
     assert raised.value.code == 0
     assert "offline Retrieval Lab" in capsys.readouterr().out
+
+
+def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main(["--version"])
+    assert raised.value.code == 0
+    expected = importlib_metadata.version("retrieval-lab-sdk")
+    assert capsys.readouterr().out.strip() == f"retrieval-lab {expected}"
+
+
+def test_version_falls_back_when_distribution_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(name: str) -> str:
+        raise importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(cli_app.importlib_metadata, "version", missing)
+    assert cli_app._distribution_version() == "0.1.0rc1"
 
 
 def test_init_validate_and_run_commands(
