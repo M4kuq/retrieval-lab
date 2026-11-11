@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,8 @@ from retrieval_lab import (
 )
 from retrieval_lab.comparison import compare_runs
 from retrieval_lab.datasets import EvaluationDataset
-from retrieval_lab.domain import EvaluationQuery
+from retrieval_lab.domain import EvaluationQuery, EvaluationResult
+from retrieval_lab.evaluation.engine import content_hash
 from retrieval_lab.evaluation.precomputed import RetrievedQueryResult, evaluate_results
 from retrieval_lab.exceptions import (
     ConfigurationError,
@@ -309,6 +311,55 @@ def test_evaluate_fused_results_records_fusion_provenance() -> None:
         name="hybrid",
     )
     assert plain.run_id != fused.run_id
+
+
+def test_evaluate_fused_results_distinguishes_source_names() -> None:
+    dataset = _dataset()
+    sources = _source_results()
+    renamed = {"sparse": sources["bm25"], "vector": sources["dense"]}
+
+    fused = evaluate_fused_results(dataset=dataset, results=sources, top_k=(1, 3))
+    other = evaluate_fused_results(dataset=dataset, results=renamed, top_k=(1, 3))
+
+    assert other.manifest["fusion"] == {"rrf_k": 60, "sources": ["sparse", "vector"]}
+    assert other.run_id != fused.run_id
+
+
+def test_evaluate_fused_results_run_id_pins_the_payload_keys() -> None:
+    fused = evaluate_fused_results(
+        dataset=_dataset(), results=_source_results(), top_k=(1, 3)
+    )
+
+    payload = {
+        key: value
+        for key, value in fused.manifest.items()
+        if key not in ("query_count", "query_ids")
+    }
+    assert set(payload) == {
+        "dataset_hash",
+        "evaluation_mode",
+        "fusion",
+        "metric_version",
+        "name",
+        "relevance_level",
+        "retrieved_results_hash",
+        "top_k",
+    }
+    assert fused.run_id == content_hash(payload)
+
+
+def test_evaluate_fused_results_survives_a_json_round_trip(tmp_path: Path) -> None:
+    fused = evaluate_fused_results(
+        dataset=_dataset(), results=_source_results(), top_k=(1, 3)
+    )
+    path = tmp_path / "fused.json"
+
+    fused.save_json(path)
+    loaded = EvaluationResult.load_json(path)
+
+    assert loaded.run_id == fused.run_id
+    assert loaded.manifest["fusion"] == {"rrf_k": 60, "sources": ["bm25", "dense"]}
+    assert loaded.to_dict() == fused.to_dict()
 
 
 def test_evaluate_fused_results_rejects_bad_parameters() -> None:

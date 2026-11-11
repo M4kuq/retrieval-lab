@@ -327,8 +327,9 @@ query. It computes the same metrics and dataset hash as `EvaluationRunner` witho
 indexing or retrieval. Precomputed chunk rankings are not yet supported.
 
 `fuse_rankings()` fuses named document-ID rankings with reciprocal-rank fusion
-(`rrf_k=60` by default; one-based ranks, source scores ignored, ties broken by
-identifier — the same rule as `HybridRetriever`). `fuse_results()` applies it
+(`rrf_k=60` by default; one-based ranks, source scores ignored — the same RRF
+rule as `HybridRetriever`, but summed exactly here so mathematical ties always
+break by identifier). `fuse_results()` applies it
 per query across two or more sources that cover identical query ID sets, and
 `evaluate_fused_results()` evaluates the fused rankings through
 `evaluate_results()`, so a fused run is a first-class `EvaluationResult` that

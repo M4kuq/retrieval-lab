@@ -24,9 +24,9 @@ def fuse_rankings(
     """Fuse named identifier rankings with reciprocal-rank fusion.
 
     Each identifier scores the sum of ``1 / (rrf_k + rank)`` over the rankings
-    containing it, using one-based ranks. Scores are summed exactly, so
-    mathematically equal scores always tie-break by identifier, matching
-    ``HybridRetriever``.
+    containing it, using one-based ranks. This is the same RRF rule as
+    ``HybridRetriever``, but the scores are summed exactly here, so
+    mathematically equal scores always tie-break by identifier.
     """
 
     return _fuse_validated(_validate_rankings(rankings), _validate_rrf_k(rrf_k))
