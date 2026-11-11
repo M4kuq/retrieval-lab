@@ -45,6 +45,10 @@ Benchmark loaders (offline; the benchmark must already be on disk):
 
 - `BenchmarkDataset`, `load_beir_dataset`
 
+Hybrid fusion of precomputed rankings:
+
+- `fuse_rankings`, `fuse_results`, `evaluate_fused_results`
+
 Configuration:
 
 - `RetrievalConfig`, `ExperimentConfig`, `CorpusConfig`, `DatasetConfig`,
@@ -321,6 +325,16 @@ against the supplied corpus.
 `evaluate_results()` accepts exactly one `RetrievedQueryResult` for every dataset
 query. It computes the same metrics and dataset hash as `EvaluationRunner` without
 indexing or retrieval. Precomputed chunk rankings are not yet supported.
+
+`fuse_rankings()` fuses named document-ID rankings with reciprocal-rank fusion
+(`rrf_k=60` by default; one-based ranks, source scores ignored — the same RRF
+rule as `HybridRetriever`, but summed exactly here so mathematical ties always
+break by identifier). `fuse_results()` applies it
+per query across two or more sources that cover identical query ID sets, and
+`evaluate_fused_results()` evaluates the fused rankings through
+`evaluate_results()`, so a fused run is a first-class `EvaluationResult` that
+`compare_runs()` can diff against other fused runs (for example across
+`rrf_k` values or source sets).
 
 ## Result contract
 

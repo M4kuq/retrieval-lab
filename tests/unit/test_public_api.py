@@ -29,7 +29,10 @@ from retrieval_lab import (
     ValidationResult,
     compare_result_files,
     evaluate_configured_quality_gates,
+    evaluate_fused_results,
     evaluate_results,
+    fuse_rankings,
+    fuse_results,
     initialize_project,
     inspect_result,
     load_documents,
@@ -79,6 +82,9 @@ def test_new_milestone_apis_are_available_from_the_package_root() -> None:
     assert EvaluationDataset.__module__ == "retrieval_lab.datasets"
     assert RetrievedQueryResult.__module__ == "retrieval_lab.evaluation.precomputed"
     assert evaluate_results.__module__ == "retrieval_lab.evaluation.precomputed"
+    assert evaluate_fused_results.__module__ == "retrieval_lab.fusion"
+    assert fuse_rankings.__module__ == "retrieval_lab.fusion"
+    assert fuse_results.__module__ == "retrieval_lab.fusion"
     assert load_documents.__module__ == "retrieval_lab.loaders"
     assert validate_dataset.__module__ == "retrieval_lab.datasets"
 

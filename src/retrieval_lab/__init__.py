@@ -111,6 +111,7 @@ from retrieval_lab.exceptions import (
     RetrievalLabError,
     RetrieverContractError,
 )
+from retrieval_lab.fusion import evaluate_fused_results, fuse_rankings, fuse_results
 from retrieval_lab.generation import (
     CallableGenerator,
     GenerateCallable,
@@ -293,6 +294,7 @@ __all__ = [
     "evaluate_answers",
     "evaluate_async_retrievers",
     "evaluate_configured_quality_gates",
+    "evaluate_fused_results",
     "evaluate_quality_gates",
     "evaluate_rag_answer",
     "evaluate_results",
@@ -300,6 +302,8 @@ __all__ = [
     "exact_match",
     "faithfulness",
     "finalize_dataset_bundle",
+    "fuse_rankings",
+    "fuse_results",
     "generate_answer",
     "generate_synthetic_draft",
     "initialize_project",
