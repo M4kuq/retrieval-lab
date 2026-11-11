@@ -61,6 +61,13 @@ def test_release_metadata_and_manifest_are_explicit() -> None:
     assert "recursive-include tools *.py" in manifest
 
 
+def test_readme_install_guidance_uses_the_distribution_name() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    targets = re.findall(r"pip install\s+['\"]?([\w.-]+)", readme)
+    assert targets
+    assert all(target == "retrieval-lab-sdk" for target in targets)
+
+
 def test_index_python_snippets_run() -> None:
     text = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
     blocks = re.findall(r"```python\n(.*?)```", text, flags=re.DOTALL)
