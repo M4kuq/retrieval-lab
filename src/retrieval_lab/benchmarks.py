@@ -22,6 +22,8 @@ from retrieval_lab.exceptions import DatasetValidationError
 __all__ = [
     "BenchmarkDataset",
     "load_beir_dataset",
+    "load_msmarco_dataset",
+    "load_natural_questions_dataset",
 ]
 
 
@@ -67,10 +69,7 @@ def load_beir_dataset(path: str | Path, *, split: str = "test") -> BenchmarkData
     being dropped silently.
     """
 
-    if not isinstance(split, str) or not split.strip():
-        raise DatasetValidationError("split must be a non-empty string")
-    if "/" in split or "\\" in split or split in {".", ".."}:
-        raise DatasetValidationError("split must be a plain file name")
+    _validate_split(split)
     root = Path(path)
     if not root.is_dir():
         raise DatasetValidationError(f"benchmark directory not found: {root}")
@@ -88,6 +87,131 @@ def load_beir_dataset(path: str | Path, *, split: str = "test") -> BenchmarkData
         query_ids=frozenset(queries),
         document_ids=frozenset(document.id for document in documents),
     )
+    return _finish_benchmark(
+        documents,
+        queries,
+        grades_by_query,
+        no_positive_message=(
+            f"no queries in {queries_path} have positive judgments in {qrels_path}"
+        ),
+    )
+
+
+def load_msmarco_dataset(path: str | Path, *, split: str = "train") -> BenchmarkDataset:
+    """Load an MS MARCO passage-ranking dataset directory from disk.
+
+    The directory must contain ``collection.tsv`` (``pid`` and passage
+    text per line), ``queries.<split>.tsv`` (``qid`` and query text),
+    and ``qrels.<split>.tsv`` in TREC format (``qid``, an ignored
+    iteration column, ``pid``, and an integer relevance). Positive
+    relevance values become graded judgments. Queries with no positive
+    judgment cannot be evaluated and are reported in
+    ``excluded_query_ids`` instead of being dropped silently.
+    """
+
+    _validate_split(split)
+    root = Path(path)
+    if not root.is_dir():
+        raise DatasetValidationError(f"benchmark directory not found: {root}")
+    collection_path = root / "collection.tsv"
+    queries_path = root / f"queries.{split}.tsv"
+    qrels_path = root / f"qrels.{split}.tsv"
+    for required in (collection_path, queries_path, qrels_path):
+        if not required.is_file():
+            raise DatasetValidationError(f"benchmark file not found: {required}")
+
+    documents = tuple(
+        Document(document_id, text)
+        for document_id, text in _load_tsv_pairs(collection_path, kind="collection")
+    )
+    queries = dict(_load_tsv_pairs(queries_path, kind="queries"))
+    grades_by_query = _load_msmarco_qrels(
+        qrels_path,
+        query_ids=frozenset(queries),
+        document_ids=frozenset(document.id for document in documents),
+    )
+    return _finish_benchmark(
+        documents,
+        queries,
+        grades_by_query,
+        no_positive_message=(
+            f"no queries in {queries_path} have positive judgments in {qrels_path}"
+        ),
+    )
+
+
+def load_natural_questions_dataset(path: str | Path) -> BenchmarkDataset:
+    """Load a simplified Natural Questions JSONL file from disk.
+
+    Each record is one example of the official simplified format: an
+    ``example_id``, a ``question_text``, the page's ``document_text``
+    (space-separated tokens), and ``annotations`` whose ``long_answer``
+    spans mark the answer-bearing page. Every example's page becomes a
+    corpus document keyed by the string form of its ``example_id``;
+    an example is a relevant judgment (grade 1) for its own question
+    when at least one annotation carries a long answer
+    (``candidate_index`` >= 0 with a valid token span). Examples with
+    no long answer cannot be evaluated and are reported in
+    ``excluded_query_ids`` instead of being dropped silently.
+    """
+
+    source = Path(path)
+    if not source.is_file():
+        raise DatasetValidationError(f"benchmark file not found: {source}")
+    documents: list[Document] = []
+    queries: dict[str, str] = {}
+    grades_by_query: dict[str, dict[str, int]] = {}
+    seen: dict[str, int] = {}
+    for line_number, record in _jsonl_records(source):
+        example_id = _nq_example_id(record, path=source, line_number=line_number)
+        if example_id in seen:
+            raise _error(
+                source,
+                line_number,
+                f"duplicate example_id {example_id!r}; first seen on line "
+                f"{seen[example_id]}",
+            )
+        seen[example_id] = line_number
+        question = record.get("question_text")
+        if not isinstance(question, str) or not question.strip():
+            raise _error(
+                source, line_number, "question_text must be a non-empty string"
+            )
+        document_text = record.get("document_text")
+        if not isinstance(document_text, str) or not document_text.strip():
+            raise _error(
+                source, line_number, "document_text must be a non-empty string"
+            )
+        documents.append(Document(example_id, document_text))
+        queries[example_id] = question
+        if _nq_has_long_answer(
+            record, path=source, line_number=line_number, document_text=document_text
+        ):
+            grades_by_query[example_id] = {example_id: 1}
+    if not documents:
+        raise _error(source, 1, "examples must not be empty")
+    return _finish_benchmark(
+        tuple(documents),
+        queries,
+        grades_by_query,
+        no_positive_message=f"no examples in {source} have a long answer",
+    )
+
+
+def _validate_split(split: str) -> None:
+    if not isinstance(split, str) or not split.strip():
+        raise DatasetValidationError("split must be a non-empty string")
+    if "/" in split or "\\" in split or split in {".", ".."}:
+        raise DatasetValidationError("split must be a plain file name")
+
+
+def _finish_benchmark(
+    documents: tuple[Document, ...],
+    queries: dict[str, str],
+    grades_by_query: dict[str, dict[str, int]],
+    *,
+    no_positive_message: str,
+) -> BenchmarkDataset:
     evaluated: list[EvaluationQuery] = []
     excluded: list[str] = []
     for query_id, query in queries.items():
@@ -103,9 +227,7 @@ def load_beir_dataset(path: str | Path, *, split: str = "test") -> BenchmarkData
             )
         )
     if not evaluated:
-        raise DatasetValidationError(
-            f"no queries in {queries_path} have positive judgments in {qrels_path}"
-        )
+        raise DatasetValidationError(no_positive_message)
     dataset = EvaluationDataset(
         evaluated,
         relevance_grades_by_query=grades_by_query,
@@ -115,6 +237,130 @@ def load_beir_dataset(path: str | Path, *, split: str = "test") -> BenchmarkData
         dataset=dataset,
         excluded_query_ids=tuple(excluded),
     )
+
+
+def _load_tsv_pairs(path: Path, *, kind: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    for line_number, raw_line in _iter_lines(path):
+        if not raw_line.strip():
+            continue
+        columns = raw_line.split("\t", 1)
+        if len(columns) != 2:
+            raise _error(
+                path, line_number, f"{kind} rows must have exactly two TSV columns"
+            )
+        identifier, text = columns[0].strip(), columns[1]
+        if not identifier:
+            raise _error(path, line_number, f"{kind} ID must be a non-empty string")
+        if identifier in seen:
+            raise _error(
+                path,
+                line_number,
+                f"duplicate {kind} ID {identifier!r}; first seen on line "
+                f"{seen[identifier]}",
+            )
+        seen[identifier] = line_number
+        if not text.strip():
+            raise _error(path, line_number, f"{kind} text must be a non-empty string")
+        pairs.append((identifier, text))
+    if not pairs:
+        raise _error(path, 1, f"{kind} must not be empty")
+    return pairs
+
+
+def _load_msmarco_qrels(
+    path: Path, *, query_ids: frozenset[str], document_ids: frozenset[str]
+) -> dict[str, dict[str, int]]:
+    grades: dict[str, dict[str, int]] = {}
+    for line_number, raw_line in _iter_lines(path):
+        if not raw_line.strip():
+            continue
+        columns = raw_line.split("\t")
+        if len(columns) != 4:
+            raise _error(
+                path, line_number, "qrels rows must have exactly four TSV columns"
+            )
+        query_id, _, document_id, score_text = (column.strip() for column in columns)
+        if query_id not in query_ids:
+            raise _error(
+                path, line_number, f"qrels reference unknown query {query_id!r}"
+            )
+        if document_id not in document_ids:
+            raise _error(
+                path, line_number, f"qrels reference unknown corpus ID {document_id!r}"
+            )
+        try:
+            score = int(score_text)
+        except ValueError:
+            raise _error(
+                path, line_number, f"qrels score must be an integer, got {score_text!r}"
+            ) from None
+        if score < 0:
+            raise _error(path, line_number, "qrels score must not be negative")
+        if score > 0:
+            grades.setdefault(query_id, {})[document_id] = score
+        elif query_id in grades:
+            grades[query_id].pop(document_id, None)
+    return {query_id: items for query_id, items in grades.items() if items}
+
+
+def _nq_example_id(record: dict[str, object], *, path: Path, line_number: int) -> str:
+    identifier = record.get("example_id")
+    if isinstance(identifier, bool):
+        raise _error(
+            path, line_number, "example_id must be a non-empty string or integer"
+        )
+    if isinstance(identifier, int):
+        return str(identifier)
+    if isinstance(identifier, str) and identifier.strip():
+        return identifier
+    raise _error(path, line_number, "example_id must be a non-empty string or integer")
+
+
+def _nq_has_long_answer(
+    record: dict[str, object],
+    *,
+    path: Path,
+    line_number: int,
+    document_text: str,
+) -> bool:
+    annotations = record.get("annotations")
+    if not isinstance(annotations, list) or not annotations:
+        raise _error(path, line_number, "annotations must be a non-empty list")
+    token_count = len(document_text.split())
+    found = False
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            raise _error(path, line_number, "annotations must contain objects")
+        long_answer = annotation.get("long_answer")
+        if not isinstance(long_answer, dict):
+            raise _error(
+                path, line_number, "annotations must contain a long_answer object"
+            )
+        candidate_index = long_answer.get("candidate_index")
+        if isinstance(candidate_index, bool) or not isinstance(candidate_index, int):
+            raise _error(
+                path, line_number, "long_answer candidate_index must be an integer"
+            )
+        if candidate_index < 0:
+            continue
+        start = long_answer.get("start_token")
+        end = long_answer.get("end_token")
+        if (
+            isinstance(start, bool)
+            or not isinstance(start, int)
+            or isinstance(end, bool)
+            or not isinstance(end, int)
+            or not 0 <= start < end <= token_count
+        ):
+            raise _error(
+                path,
+                line_number,
+                "long_answer token span is outside the document tokens",
+            )
+        found = True
+    return found
 
 
 def _load_beir_corpus(path: Path) -> tuple[Document, ...]:
