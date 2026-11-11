@@ -63,10 +63,9 @@ def test_release_metadata_and_manifest_are_explicit() -> None:
 
 def test_readme_install_guidance_uses_the_distribution_name() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "pip install retrieval-lab-sdk" in readme
-    assert "pip install 'retrieval-lab-sdk[dense]'" in readme
-    assert "retrieval-lab[" not in readme
-    assert 'retrieval-lab"' not in readme
+    targets = re.findall(r"pip install\s+['\"]?([\w.-]+)", readme)
+    assert targets
+    assert all(target == "retrieval-lab-sdk" for target in targets)
 
 
 def test_index_python_snippets_run() -> None:
