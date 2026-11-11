@@ -328,7 +328,7 @@ def _nq_has_long_answer(
     annotations = record.get("annotations")
     if not isinstance(annotations, list) or not annotations:
         raise _error(path, line_number, "annotations must be a non-empty list")
-    token_count = len(document_text.split())
+    token_count = len(document_text.split(" "))
     found = False
     for annotation in annotations:
         if not isinstance(annotation, dict):
@@ -343,8 +343,6 @@ def _nq_has_long_answer(
             raise _error(
                 path, line_number, "long_answer candidate_index must be an integer"
             )
-        if candidate_index < 0:
-            continue
         start = long_answer.get("start_token")
         end = long_answer.get("end_token")
         if (
@@ -352,8 +350,22 @@ def _nq_has_long_answer(
             or not isinstance(start, int)
             or isinstance(end, bool)
             or not isinstance(end, int)
-            or not 0 <= start < end <= token_count
         ):
+            raise _error(
+                path,
+                line_number,
+                "long_answer token span must use integer start_token and end_token",
+            )
+        if candidate_index < 0:
+            if candidate_index == start == end == -1:
+                continue
+            raise _error(
+                path,
+                line_number,
+                "long_answer without an answer must use -1 for candidate_index, "
+                "start_token and end_token",
+            )
+        if not 0 <= start < end <= token_count:
             raise _error(
                 path,
                 line_number,

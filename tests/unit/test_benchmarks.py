@@ -400,7 +400,13 @@ def test_load_natural_questions_dataset_converts_records(tmp_path: Path) -> None
         [
             _nq_record(101, question="first question"),
             _nq_record(-202, question="second question", candidate_index=1),
-            _nq_record("303", question="unanswered question", candidate_index=-1),
+            _nq_record(
+                "303",
+                question="unanswered question",
+                candidate_index=-1,
+                start_token=-1,
+                end_token=-1,
+            ),
         ],
     )
 
@@ -418,7 +424,7 @@ def test_load_natural_questions_dataset_converts_records(tmp_path: Path) -> None
 def test_load_natural_questions_dataset_accepts_any_positive_annotation(
     tmp_path: Path,
 ) -> None:
-    record = _nq_record(7, candidate_index=-1)
+    record = _nq_record(7, candidate_index=-1, start_token=-1, end_token=-1)
     annotations = record["annotations"]
     assert isinstance(annotations, list)
     annotations.append(
@@ -462,7 +468,8 @@ def test_load_natural_questions_dataset_rejects_invalid_inputs(
         load_natural_questions_dataset(path)
 
     path = _write_nq(
-        tmp_path / "none-answered.jsonl", [_nq_record(1, candidate_index=-1)]
+        tmp_path / "none-answered.jsonl",
+        [_nq_record(1, candidate_index=-1, start_token=-1, end_token=-1)],
     )
     with pytest.raises(DatasetValidationError, match="no examples"):
         load_natural_questions_dataset(path)
@@ -578,4 +585,54 @@ def test_load_natural_questions_dataset_rejects_malformed_records(
     annotations[0]["long_answer"]["candidate_index"] = "0"
     path = _write_nq(tmp_path / "bad-candidate.jsonl", [record])
     with pytest.raises(DatasetValidationError, match="candidate_index"):
+        load_natural_questions_dataset(path)
+
+
+def test_load_natural_questions_dataset_counts_space_separated_tokens(
+    tmp_path: Path,
+) -> None:
+    document = "alpha\u00a0beta gamma"
+    path = _write_nq(
+        tmp_path / "nbsp.jsonl",
+        [_nq_record(1, document=document, start_token=0, end_token=2)],
+    )
+    benchmark = load_natural_questions_dataset(path)
+    assert benchmark.dataset.queries[0].relevant_document_ids == frozenset({"1"})
+
+    path = _write_nq(
+        tmp_path / "nbsp-bad.jsonl",
+        [_nq_record(1, document=document, start_token=0, end_token=3)],
+    )
+    with pytest.raises(DatasetValidationError, match="token span"):
+        load_natural_questions_dataset(path)
+
+
+def test_load_natural_questions_dataset_rejects_inconsistent_no_answer(
+    tmp_path: Path,
+) -> None:
+    path = _write_nq(tmp_path / "mismatch.jsonl", [_nq_record(1, candidate_index=-1)])
+    with pytest.raises(DatasetValidationError, match="must use -1"):
+        load_natural_questions_dataset(path)
+
+    path = _write_nq(
+        tmp_path / "negative.jsonl",
+        [_nq_record(1, candidate_index=-2, start_token=-1, end_token=-1)],
+    )
+    with pytest.raises(DatasetValidationError, match="must use -1"):
+        load_natural_questions_dataset(path)
+
+    record = _nq_record(1, candidate_index=-1, start_token=-1, end_token=-1)
+    annotations = record["annotations"]
+    assert isinstance(annotations, list)
+    annotations[0]["long_answer"]["start_token"] = True
+    path = _write_nq(tmp_path / "bool-start.jsonl", [record])
+    with pytest.raises(DatasetValidationError, match="token span"):
+        load_natural_questions_dataset(path)
+
+    record = _nq_record(1, candidate_index=-1, start_token=-1, end_token=-1)
+    annotations = record["annotations"]
+    assert isinstance(annotations, list)
+    del annotations[0]["long_answer"]["end_token"]
+    path = _write_nq(tmp_path / "missing-end.jsonl", [record])
+    with pytest.raises(DatasetValidationError, match="token span"):
         load_natural_questions_dataset(path)
