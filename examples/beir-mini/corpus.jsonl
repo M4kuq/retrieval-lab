@@ -1,0 +1,4 @@
+{"_id": "d1", "title": "Caching", "text": "cache stores responses for fast retrieval"}
+{"_id": "d2", "title": "Retrieval metrics", "text": "recall and precision measure retrieval quality"}
+{"_id": "d3", "title": "Cache invalidation", "text": "stale cache entries must expire"}
+{"_id": "d4", "title": "Offline evaluation", "text": "evaluation runs offline with fixed queries"}

@@ -44,6 +44,15 @@ def test_japanese_python_examples_run_without_network_access() -> None:
         assert namespace["result"].schema_version == 1
 
 
+def test_benchmark_loader_example_runs_without_network_access() -> None:
+    namespace = runpy.run_path("examples/benchmark_loaders.py")
+
+    assert namespace["result"].metrics["bm25"].recall_at(3) == 1.0
+    fused = namespace["fused_result"]
+    assert fused.manifest["fusion"] == {"rrf_k": 60, "sources": ["bm25", "keyword"]}
+    assert fused.metrics["hybrid"].recall_at(3) == 1.0
+
+
 def test_japanese_yaml_is_executable_through_config_api() -> None:
     from retrieval_lab import EvaluationRunner, load_config
 
