@@ -14,6 +14,7 @@ benchmark = load_beir_dataset("examples/beir-mini")
 assert benchmark.excluded_query_ids == ("q3",)
 assert len(benchmark.documents) == 4
 assert len(benchmark.dataset.queries) == 2
+assert benchmark.dataset.relevance_grades_by_query["q1"] == {"d1": 2, "d3": 1}
 
 result = EvaluationRunner.from_dataset(
     documents=benchmark.documents,
@@ -43,3 +44,12 @@ assert fused_result.manifest["fusion"] == {
     "sources": ["bm25", "keyword"],
 }
 assert fused_result.metrics["hybrid"].recall_at(3) == 1.0
+
+# For q1, BM25 alone ranks d3 above d2. Under RRF the two tie, and the
+# identifier breaks the tie, so the fused order differs from BM25's own
+# ranking and proves both sources fed the fusion.
+fused_by_query = {
+    evaluation.query_id: evaluation.retrieved_ids
+    for evaluation in fused_result.query_results["hybrid"]
+}
+assert fused_by_query == {"q1": ("d1", "d2", "d3"), "q2": ("d2", "d1")}
