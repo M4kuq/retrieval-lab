@@ -52,22 +52,23 @@ def test_benchmark_loader_example_runs_without_network_access() -> None:
     assert namespace["result"].metrics["bm25"].recall_at(3) == 1.0
     # nDCG depends on the loaded grades (q1: d1=2, d3=1); flattening the
     # grades in the loader or the runner would change this value.
-    keyword_q1 = next(
+    bm25_q1 = next(
         evaluation
-        for evaluation in namespace["result"].query_results["keyword"]
+        for evaluation in namespace["result"].query_results["bm25"]
         if evaluation.query_id == "q1"
     )
-    assert keyword_q1.metrics_by_cutoff[3]["ndcg"] == pytest.approx(
-        0.9639404333166532
-    )
+    assert bm25_q1.metrics_by_cutoff[3]["ndcg"] == pytest.approx(0.58688267143572)
     fused = namespace["fused_result"]
     assert fused.manifest["fusion"] == {"rrf_k": 60, "sources": ["bm25", "keyword"]}
     assert fused.metrics["hybrid"].recall_at(3) == 1.0
+    # The fused q1 order (d1, d2, d3) matches neither source: keyword
+    # gives (d1, d3, d2) and BM25 gives (d2, d3, d1), so a fusion that
+    # ignored either source would fail this assertion.
     fused_by_query = {
         evaluation.query_id: evaluation.retrieved_ids
         for evaluation in fused.query_results["hybrid"]
     }
-    assert fused_by_query == {"q1": ("d1", "d2", "d3"), "q2": ("d2", "d1")}
+    assert fused_by_query == {"q1": ("d1", "d2", "d3"), "q2": ("d4",)}
 
 
 def test_japanese_yaml_is_executable_through_config_api() -> None:

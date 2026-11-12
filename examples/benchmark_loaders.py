@@ -45,11 +45,13 @@ assert fused_result.manifest["fusion"] == {
 }
 assert fused_result.metrics["hybrid"].recall_at(3) == 1.0
 
-# For q1, BM25 alone ranks d3 above d2. Under RRF the two tie, and the
-# identifier breaks the tie, so the fused order differs from BM25's own
-# ranking and proves both sources fed the fusion.
+# For q1 the sources disagree: keyword ranks d1 first (it matches both
+# terms) and d2 last, while BM25 ranks the short, term-dense d2 first and
+# the long d1 last. Under RRF, d1 and d2 tie and the identifier breaks
+# the tie, so the fused order matches neither source; dropping either
+# source's contribution would change it.
 fused_by_query = {
     evaluation.query_id: evaluation.retrieved_ids
     for evaluation in fused_result.query_results["hybrid"]
 }
-assert fused_by_query == {"q1": ("d1", "d2", "d3"), "q2": ("d2", "d1")}
+assert fused_by_query == {"q1": ("d1", "d2", "d3"), "q2": ("d4",)}
