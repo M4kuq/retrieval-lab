@@ -13,6 +13,10 @@ cut.
 
 ### Added
 
+- Executable example: `examples/checkpoint_resume.py` simulates a crash
+  during a checkpointed evaluation and resumes with
+  `run_with_checkpoint()`, running only the queries missing from the
+  checkpoint before scoring the collected rankings.
 - Executable example: `examples/benchmark_loaders.py` loads a miniature
   BEIR-format dataset (`examples/beir-mini/`) with `load_beir_dataset()`,
   evaluates the keyword and BM25 strategies on it, and fuses the two

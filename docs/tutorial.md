@@ -136,6 +136,7 @@ ranking や保存済み run の ranking をそのまま対象にできます。
 結び付けた JSONL へ追記します（record ごとに flush と fsync）。
 `run_with_checkpoint()` は checkpoint に無い query だけを実行して全 ranking
 を返すため、大きな評価が途中で止まっても最初からやり直す必要はありません。
+中断と再開を再現する実行可能な最小例が `examples/checkpoint_resume.py` です。
 
 ### 比較に統計と diff レポートを付ける
 
