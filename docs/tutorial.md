@@ -98,6 +98,52 @@ baseline と candidate がある場合は、保存済み JSON を再実行せず
 uv run retrieval-lab compare baseline/result.json /tmp/retrieval-lab-japanese/result.json
 ```
 
+## ベンチマーク形式のデータセットを使う
+
+公開ベンチマークのレイアウトは、オフラインローダでそのまま読み込めます。
+ダウンロードは利用者側で行い、ローダ自体はネットワークへアクセスしません。
+
+- `load_beir_dataset()` — BEIR 形式のディレクトリ（`corpus.jsonl`、
+  `queries.jsonl`、`qrels/<split>.tsv`）。
+- `load_msmarco_dataset()` — MS MARCO passage ranking のディレクトリ
+  （`collection.tsv`、`queries.<split>.tsv`、TREC 形式の `qrels.<split>.tsv`）。
+- `load_natural_questions_dataset()` — simplified Natural Questions の
+  JSONL ファイル。各 example のページが corpus 文書に、long answer の
+  annotation が grade 1 の判定になります。
+
+どのローダも `BenchmarkDataset`（corpus 文書と graded relevance を持つ
+`EvaluationDataset`）を返します。split に正の判定がない query は評価から
+外れ、`excluded_query_ids` に報告されます。読み込んだデータは通常の
+`EvaluationRunner.from_dataset` で評価できます。実行できる最小例が
+`examples/benchmark_loaders.py` で、テストとして実行されるため API から
+ずれません。
+
+```console
+uv run python examples/benchmark_loaders.py
+```
+
+### ランキングを融合する
+
+既存の ranking は RRF で融合して、それ自体をひとつの run として評価できます。
+`evaluate_fused_results()` は query ごとの ranking を `RetrievedQueryResult`
+として受け取り、融合の設定（`rrf_k` と source 名）を結果の manifest に
+記録します。runner の Hybrid retriever と違い、外部システムが出した
+ranking や保存済み run の ranking をそのまま対象にできます。
+
+### 大きな評価を再開する
+
+`EvaluationCheckpoint` は query ごとの ranking を run の fingerprint に
+結び付けた JSONL へ追記します（record ごとに flush と fsync）。
+`run_with_checkpoint()` は checkpoint に無い query だけを実行して全 ranking
+を返すため、大きな評価が途中で止まっても最初からやり直す必要はありません。
+
+### 比較に統計と diff レポートを付ける
+
+`compare_runs()` の per-query delta は `bootstrap_metric_delta()` で
+bootstrap の信頼区間と p 値を付けられます（seed で決定的です）。
+比較結果は `RunComparison.to_html()` / `save_html(path)` で、単独で開ける
+HTML の diff レポートとしても書き出せます。
+
 ## Checks
 
 次の小さな確認で、入力が実際に使われていることを確かめられます。

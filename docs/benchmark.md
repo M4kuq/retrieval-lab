@@ -74,6 +74,22 @@ latency record. Do not use this synthetic harness to publish throughput,
 tail-latency, hardware, or production-quality claims. CPU, OS, Python version,
 cache state, and workload size all affect observations.
 
+## Evaluating a downloaded benchmark collection
+
+The harness above uses a synthetic collection generated in memory. To
+evaluate a real benchmark layout you have downloaded yourself, use the
+offline loaders instead: `load_beir_dataset()` reads a BEIR directory,
+`load_msmarco_dataset()` reads an MS MARCO passage-ranking directory,
+and `load_natural_questions_dataset()` reads a simplified Natural
+Questions JSONL file. Each returns a `BenchmarkDataset` whose graded
+relevance feeds `EvaluationRunner.from_dataset`; queries without a
+positive judgment in the split are reported as `excluded_query_ids`
+rather than silently scored. The loaders never download anything.
+`examples/benchmark_loaders.py` is an executable miniature of the BEIR
+path, and the tutorial covers the loaders together with fusion of
+precomputed rankings, evaluation checkpoints, and comparison
+statistics.
+
 ## Constraints
 
 This is an offline smoke benchmark, not a load generator. It exercises only
