@@ -46,6 +46,14 @@ def test_japanese_python_examples_run_without_network_access() -> None:
         assert namespace["result"].schema_version == 1
 
 
+def test_checkpoint_resume_example_runs_without_network_access() -> None:
+    namespace = runpy.run_path("examples/checkpoint_resume.py")
+
+    # The first pass crashes on q2, so the resume re-runs only q2 and q3.
+    assert namespace["attempts"] == ["q1", "q2", "q2", "q3"]
+    assert namespace["result"].metrics["checkpointed"].recall_at(1) == 1.0
+
+
 def test_benchmark_loader_example_runs_without_network_access() -> None:
     namespace = runpy.run_path("examples/benchmark_loaders.py")
 
