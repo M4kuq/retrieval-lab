@@ -13,6 +13,11 @@ cut.
 
 ### Added
 
+- Executable example: `examples/benchmark_loaders.py` loads a miniature
+  BEIR-format dataset (`examples/beir-mini/`) with `load_beir_dataset()`,
+  evaluates the keyword and BM25 strategies on it, and fuses the two
+  rankings with `evaluate_fused_results()`; the example runs as an
+  integration test so it cannot drift from the public API.
 - Run diff report: `RunComparison.to_html()` / `save_html(path)` (and
   `comparison_html()` in `retrieval_lab.reporting`) render a standalone
   escaped HTML report of a two-run comparison, with comparability

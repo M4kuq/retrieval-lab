@@ -1,0 +1,4 @@
+{"_id": "d1", "title": "Overview", "text": "cache the quick brown fox jumps over a lazy dog and wanders through quiet meadows under soft morning light while birds sing gentle songs above calm rivers and green hills metrics the quick brown fox jumps over a lazy dog and wanders through quiet meadows under soft morning light while birds sing gentle songs above calm rivers and green hills"}
+{"_id": "d2", "title": "Response store", "text": "cache cache cache cache cache stores responses for fast retrieval"}
+{"_id": "d3", "title": "Quality measures", "text": "metrics metrics metrics measure retrieval quality"}
+{"_id": "d4", "title": "Offline evaluation", "text": "evaluation runs offline with fixed queries"}
