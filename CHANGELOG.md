@@ -112,8 +112,9 @@ cut.
   `chunk_hash` in the manifest — a caller-supplied `chunk_hash` value, or
   a deterministic hash of the dataset's chunk ID set when omitted — so
   chunk-level runs satisfy the strict comparability contract instead of
-  always raising `IncomparableRunError`. Document-level run IDs are
-  unchanged.
+  always raising `IncomparableRunError`. A derived hash certifies the
+  dataset's chunk ID set only, not a chunking configuration.
+  Document-level run IDs are unchanged.
 
 ## [0.1.0rc1] - 2026-08-10
 

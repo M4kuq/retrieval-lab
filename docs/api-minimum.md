@@ -333,7 +333,12 @@ For a chunk-level dataset the manifest also records a chunk hash, which
 strict comparison requires: the caller's `chunk_hash` argument when
 supplied, otherwise a deterministic hash of the dataset's chunk ID set.
 Runs over the same chunk set therefore stay comparable, while runs over
-different chunk sets stay blocked.
+different chunk sets stay blocked. A derived hash certifies the
+dataset's chunk ID set only, not a chunking configuration; to compare a
+precomputed run against a runner-produced run, pass the runner's
+`chunk_hash` explicitly. The argument is also accepted for
+document-level datasets, where it joins the run identity and surfaces
+in comparisons as a non-blocking variable difference.
 
 `fuse_rankings()` fuses named identifier rankings with reciprocal-rank fusion
 (`rrf_k=60` by default; one-based ranks, source scores ignored — the same RRF

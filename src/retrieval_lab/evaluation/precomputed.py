@@ -96,7 +96,10 @@ def evaluate_results(
     asserts the chunk identity of the producing system, and when it is
     omitted the identity is derived deterministically from the dataset's
     chunk ID set, so runs over the same chunk set stay comparable while
-    runs over different chunk sets stay blocked.
+    runs over different chunk sets stay blocked. A derived hash certifies
+    the dataset's chunk ID set only, not a chunking configuration; to
+    compare a precomputed run against a runner-produced run, pass that
+    run's ``chunk_hash`` explicitly.
     """
 
     normalized_name = _validate_name(name)
