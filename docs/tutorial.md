@@ -173,6 +173,8 @@ search と build/index に限定され、指標計算時間は latency に含ま
   `EmbeddingBackend` を注入した Dense と Hybrid を試す。
 - `examples/custom_callable.py` で、既存検索サービスを `CallableRetriever` に接続する。
 - `examples/precomputed_ranking.py` で、すでに取得済みの ranking を共通 metric で評価する。
+- `examples/chunk_rankings.py` で、外部システムの chunk ranking を chunk レベルの
+  正解データで評価し、RRF で融合する。
 - `notebooks/japanese_bm25_tutorial.ipynb` を上から順に実行する。
 - 本番用の qrels は、合成データや tutorial の出力を正式な ground truth とせず、
   独立した relevance レビューで作成する。

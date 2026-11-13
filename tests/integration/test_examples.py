@@ -69,6 +69,27 @@ def test_standard_loaders_example_runs_without_network_access() -> None:
     assert namespace["nq_result"].metrics["bm25"].recall_at(1) == 1.0
 
 
+def test_chunk_rankings_example_runs_without_network_access() -> None:
+    namespace = runpy.run_path("examples/chunk_rankings.py")
+
+    assert namespace["dataset"].relevance_level == "chunk"
+    assert namespace["vector"].metrics["vector"].recall_at(3) == 1.0
+    fused = namespace["fused"]
+    assert fused.manifest["relevance_level"] == "chunk"
+    assert fused.manifest["fusion"] == {"rrf_k": 60, "sources": ["keyword", "vector"]}
+    # Neither fused order equals a source order: q1 fuses to
+    # (doc-refund#0, doc-refund#1, doc-shipping#0) although vector put
+    # doc-refund#1 first and keyword returned only doc-refund#0.
+    fused_by_query = {
+        evaluation.query_id: evaluation.retrieved_ids
+        for evaluation in fused.query_results["hybrid"]
+    }
+    assert fused_by_query == {
+        "q1": ("doc-refund#0", "doc-refund#1", "doc-shipping#0"),
+        "q2": ("doc-cache#2", "doc-cache#0", "doc-cache#1"),
+    }
+
+
 def test_checkpoint_resume_example_runs_without_network_access() -> None:
     namespace = runpy.run_path("examples/checkpoint_resume.py")
 

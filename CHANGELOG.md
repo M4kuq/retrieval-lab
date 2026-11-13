@@ -21,6 +21,11 @@ cut.
   document-level run IDs are unchanged. Fused evaluation through
   `evaluate_fused_results()` works at chunk level the same way and is
   now pinned by hand-calculated tests.
+- Executable example: `examples/chunk_rankings.py` loads a chunk-level
+  dataset (`examples/chunked-qrels.jsonl`), scores two external
+  systems' chunk rankings with `evaluate_results()`, and fuses them
+  with `evaluate_fused_results()`; the example runs as an integration
+  test so it cannot drift from the public API.
 - Executable example: `examples/standard_loaders.py` loads miniature
   MS MARCO (`examples/msmarco-mini/`) and Natural Questions
   (`examples/nq-mini.jsonl`) fixtures with `load_msmarco_dataset()`
