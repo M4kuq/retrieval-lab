@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from retrieval_lab import load_result
+from retrieval_lab import compare_runs, evaluate_results, load_result
 
 
 def test_file_input_example_runs_without_network_access() -> None:
@@ -88,6 +88,32 @@ def test_chunk_rankings_example_runs_without_network_access() -> None:
         "q1": ("doc-refund#0", "doc-refund#1", "doc-shipping#0"),
         "q2": ("doc-cache#2", "doc-cache#0", "doc-cache#1"),
     }
+
+
+def test_chunk_rankings_example_outputs_are_comparable() -> None:
+    namespace = runpy.run_path("examples/chunk_rankings.py")
+
+    vector = namespace["vector"]
+    keyword = namespace["keyword"]
+    fused = namespace["fused"]
+    chunk_hash = vector.manifest["chunk_hash"]
+    assert isinstance(chunk_hash, str) and chunk_hash
+    assert keyword.manifest["chunk_hash"] == chunk_hash
+    assert fused.manifest["chunk_hash"] == chunk_hash
+    for result in (vector, keyword, fused):
+        assert compare_runs(result, result).comparability.comparable is True
+
+    # A regression pair over the example fixture: the "vector" system
+    # re-evaluated from the other system's rankings diffs cleanly.
+    rerun = evaluate_results(
+        dataset=namespace["dataset"],
+        retrieved_results=namespace["keyword_rankings"],
+        top_k=(1, 3),
+        name="vector",
+    )
+    comparison = compare_runs(vector, rerun)
+    assert comparison.comparability.comparable is True
+    assert set(comparison.comparisons) == {"vector"}
 
 
 def test_checkpoint_resume_example_runs_without_network_access() -> None:

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 import pytest
 
+from retrieval_lab.comparison import check_comparability, compare_runs
 from retrieval_lab.datasets import EvaluationDataset
 from retrieval_lab.domain import EvaluationQuery
 from retrieval_lab.evaluation.precomputed import (
@@ -15,6 +16,7 @@ from retrieval_lab.exceptions import (
     ConfigurationError,
     DatasetValidationError,
     EvaluationError,
+    IncomparableRunError,
     RetrieverContractError,
 )
 
@@ -249,6 +251,221 @@ def test_relevance_level_is_part_of_the_precomputed_run_identity() -> None:
     assert chunk.manifest["relevance_level"] == "chunk"
     assert document.run_id != chunk.run_id
     assert document.metrics == chunk.metrics
+
+
+def test_chunk_manifest_records_a_deterministic_derived_chunk_hash() -> None:
+    result = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+    rerun = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+
+    chunk_hash = result.manifest["chunk_hash"]
+    assert isinstance(chunk_hash, str)
+    assert len(chunk_hash) == 64
+    # The derivation format is part of the run identity contract: the
+    # content hash of the sorted chunk ID set {chunk-a, chunk-b, chunk-c}.
+    expected = "6b8d177d04d0c613ea359af359b4bf20e799d530daa644643476fbff4df3817a"
+    assert chunk_hash == expected
+    assert rerun.manifest["chunk_hash"] == chunk_hash
+    assert rerun.run_id == result.run_id
+
+
+def test_document_run_id_is_not_moved_by_chunk_hash_support() -> None:
+    result = evaluate_results(
+        dataset=_dataset(),
+        retrieved_results=_rankings(),
+        top_k=[1, 3],
+    )
+
+    # Recorded from the implementation before chunk_hash support.
+    expected = "699012975171d1529cb72ce3452f6b629bfc329f8f83591912059dc49b2da013"
+    assert result.run_id == expected
+
+
+def test_derived_chunk_hash_ignores_query_order() -> None:
+    reordered = EvaluationDataset(
+        queries=[
+            EvaluationQuery(
+                id="q-2",
+                query="second query",
+                relevant_chunk_ids={"chunk-c"},
+            ),
+            EvaluationQuery(
+                id="q-1",
+                query="first query",
+                relevant_chunk_ids={"chunk-a", "chunk-b"},
+            ),
+        ],
+        relevance_level="chunk",
+        relevance_grades_by_query={
+            "q-2": {"chunk-c": 1},
+            "q-1": {"chunk-a": 3, "chunk-b": 1},
+        },
+    )
+    baseline = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+    candidate = evaluate_results(
+        dataset=reordered,
+        retrieved_results=list(reversed(_chunk_rankings())),
+        top_k=[1, 3],
+    )
+
+    assert candidate.manifest["chunk_hash"] == baseline.manifest["chunk_hash"]
+
+
+def test_derived_chunk_hash_tracks_the_chunk_set_not_the_grades() -> None:
+    regraded = EvaluationDataset(
+        queries=[
+            EvaluationQuery(
+                id="q-1",
+                query="first query",
+                relevant_chunk_ids={"chunk-a", "chunk-b"},
+            ),
+            EvaluationQuery(
+                id="q-2",
+                query="second query",
+                relevant_chunk_ids={"chunk-c"},
+            ),
+        ],
+        relevance_level="chunk",
+        relevance_grades_by_query={
+            "q-1": {"chunk-a": 1, "chunk-b": 2},
+            "q-2": {"chunk-c": 3},
+        },
+    )
+    baseline = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+    candidate = evaluate_results(
+        dataset=regraded,
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+
+    assert candidate.manifest["chunk_hash"] == baseline.manifest["chunk_hash"]
+    assert candidate.manifest["dataset_hash"] != baseline.manifest["dataset_hash"]
+
+
+def test_chunk_runs_compare_with_themselves_and_each_other() -> None:
+    baseline = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+    candidate = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=[
+            RetrievedQueryResult("q-1", ["chunk-a", "chunk-b"]),
+            RetrievedQueryResult("q-2", ["chunk-c"]),
+        ],
+        top_k=[1, 3],
+    )
+
+    assert check_comparability(baseline, baseline).comparable is True
+    comparison = compare_runs(baseline, candidate)
+    assert comparison.comparability.comparable is True
+    assert set(comparison.comparisons) == {"precomputed"}
+
+
+def test_chunk_runs_with_different_chunk_sets_stay_incomparable() -> None:
+    other_dataset = EvaluationDataset(
+        queries=[
+            EvaluationQuery(
+                id="q-1",
+                query="first query",
+                relevant_chunk_ids={"chunk-a", "chunk-z"},
+            ),
+            EvaluationQuery(
+                id="q-2",
+                query="second query",
+                relevant_chunk_ids={"chunk-c"},
+            ),
+        ],
+        relevance_level="chunk",
+        relevance_grades_by_query={
+            "q-1": {"chunk-a": 3, "chunk-z": 1},
+            "q-2": {"chunk-c": 1},
+        },
+    )
+    baseline = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+    candidate = evaluate_results(
+        dataset=other_dataset,
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+    )
+
+    assert candidate.manifest["chunk_hash"] != baseline.manifest["chunk_hash"]
+    report = check_comparability(baseline, candidate)
+    assert report.comparable is False
+    assert any(issue.field == "manifest.chunk_hash" for issue in report.issues)
+    with pytest.raises(IncomparableRunError):
+        compare_runs(baseline, candidate)
+
+
+def test_explicit_chunk_hash_overrides_the_derived_identity() -> None:
+    first = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+        chunk_hash="a" * 64,
+    )
+    matching = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+        chunk_hash="a" * 64,
+    )
+    other = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[1, 3],
+        chunk_hash="b" * 64,
+    )
+
+    assert first.manifest["chunk_hash"] == "a" * 64
+    assert first.run_id != other.run_id
+    assert check_comparability(first, matching).comparable is True
+    report = check_comparability(first, other)
+    assert report.comparable is False
+    assert any(issue.field == "manifest.chunk_hash" for issue in report.issues)
+
+
+def test_document_manifest_omits_chunk_hash_unless_one_is_supplied() -> None:
+    default = evaluate_results(dataset=_dataset(), retrieved_results=_rankings())
+    supplied = evaluate_results(
+        dataset=_dataset(),
+        retrieved_results=_rankings(),
+        chunk_hash="c" * 64,
+    )
+
+    assert "chunk_hash" not in default.manifest
+    assert supplied.manifest["chunk_hash"] == "c" * 64
+    assert supplied.run_id != default.run_id
+
+
+@pytest.mark.parametrize("chunk_hash", ["", "   ", 42])
+def test_evaluate_results_rejects_an_invalid_chunk_hash(chunk_hash: object) -> None:
+    with pytest.raises(ConfigurationError, match="chunk_hash"):
+        evaluate_results(
+            dataset=_chunk_dataset(),
+            retrieved_results=_chunk_rankings(),
+            chunk_hash=chunk_hash,  # type: ignore[arg-type]
+        )
 
 
 def test_evaluate_results_is_deterministic_and_uses_custom_name() -> None:

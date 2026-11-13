@@ -65,6 +65,7 @@ def evaluate_fused_results(
     rrf_k: int = 60,
     top_k: Sequence[int] = (1, 3, 5, 10),
     name: str = "hybrid",
+    chunk_hash: str | None = None,
 ) -> EvaluationResult:
     """Evaluate the RRF fusion of precomputed rankings as its own run.
 
@@ -73,6 +74,9 @@ def evaluate_fused_results(
     records the fusion provenance (``rrf_k`` and the sorted source names) and
     the run identity covers it, so fused runs across ``rrf_k`` values or
     source sets stay distinct and can be diffed with ``compare_runs``.
+    ``chunk_hash`` follows the ``evaluate_results`` rule: it asserts the
+    chunk identity for a chunk-level dataset and is derived from the
+    dataset's chunk ID set when omitted.
     """
 
     fused = fuse_results(results, rrf_k=rrf_k)
@@ -81,6 +85,7 @@ def evaluate_fused_results(
         retrieved_results=fused,
         top_k=top_k,
         name=name,
+        chunk_hash=chunk_hash,
     )
     source_names: list[JSONValue] = list(sorted(results))
     fusion: dict[str, JSONValue] = {"rrf_k": rrf_k, "sources": source_names}

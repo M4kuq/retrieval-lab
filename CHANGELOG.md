@@ -107,6 +107,14 @@ cut.
 
 - Restored `ruff check` and `ruff format` compliance on `main` after the
   v0.4 changes landed, so the CI quality job is green again (#29).
+- Chunk-level precomputed and fused runs are comparable again:
+  `evaluate_results()` and `evaluate_fused_results()` now record a
+  `chunk_hash` in the manifest — a caller-supplied `chunk_hash` value, or
+  a deterministic hash of the dataset's chunk ID set when omitted — so
+  chunk-level runs satisfy the strict comparability contract instead of
+  always raising `IncomparableRunError`. A derived hash certifies the
+  dataset's chunk ID set only, not a chunking configuration.
+  Document-level run IDs are unchanged.
 
 ## [0.1.0rc1] - 2026-08-10
 

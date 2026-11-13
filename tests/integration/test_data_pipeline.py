@@ -11,7 +11,9 @@ from retrieval_lab import (
     EvaluationQuery,
     EvaluationRunner,
     FixedSizeChunker,
+    IncomparableRunError,
     RetrievedQueryResult,
+    compare_runs,
     evaluate_results,
     load_documents,
 )
@@ -109,3 +111,51 @@ def test_dataset_runner_evaluates_explicit_chunk_relevance() -> None:
     assert result.manifest["relevance_level"] == "chunk"
     assert result.query_results["keyword"][0].retrieved_ids == (gold_chunk.id,)
     assert result.metrics["keyword"].recall_at(1) == 1.0
+
+
+def test_precomputed_run_compares_with_runner_run_via_explicit_chunk_hash() -> None:
+    document = Document("doc", "alpha beta")
+    chunker = FixedSizeChunker(size=5, overlap=0)
+    gold_chunk = chunker.chunk([document])[0]
+    dataset = EvaluationDataset(
+        [
+            EvaluationQuery(
+                "q",
+                "alpha",
+                relevant_chunk_ids={gold_chunk.id},
+            )
+        ],
+        relevance_level="chunk",
+        relevance_grades_by_query={"q": {gold_chunk.id: 2}},
+    )
+    runner_result = EvaluationRunner.from_dataset(
+        documents=[document],
+        dataset=dataset,
+        strategies=["keyword"],
+        top_k=[1],
+        chunker=chunker,
+    ).run()
+    rankings = [
+        RetrievedQueryResult(query_id="q", retrieved_document_ids=[gold_chunk.id])
+    ]
+
+    matched = evaluate_results(
+        dataset=dataset,
+        retrieved_results=rankings,
+        name="keyword",
+        top_k=[1],
+        chunk_hash=str(runner_result.manifest["chunk_hash"]),
+    )
+    assert compare_runs(runner_result, matched).comparability.comparable
+
+    # A derived hash certifies the chunk ID set only, so it must not
+    # silently stand in for the runner's chunking identity.
+    derived = evaluate_results(
+        dataset=dataset,
+        retrieved_results=rankings,
+        name="keyword",
+        top_k=[1],
+    )
+    with pytest.raises(IncomparableRunError) as captured:
+        compare_runs(runner_result, derived)
+    assert [issue.field for issue in captured.value.issues] == ["manifest.chunk_hash"]

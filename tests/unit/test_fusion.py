@@ -436,3 +436,51 @@ def test_evaluate_fused_results_supports_chunk_level_datasets() -> None:
     assert metrics[2]["ap"] == 1.0
     assert fused.manifest["relevance_level"] == "chunk"
     assert fused.manifest["fusion"] == {"rrf_k": 60, "sources": ["sys1", "sys2"]}
+
+
+def _chunk_dataset() -> EvaluationDataset:
+    return EvaluationDataset(
+        queries=[
+            EvaluationQuery(
+                id="q-1",
+                query="first query",
+                relevant_chunk_ids={"c-a", "c-b"},
+            )
+        ],
+        relevance_level="chunk",
+        relevance_grades_by_query={"q-1": {"c-a": 2, "c-b": 1}},
+    )
+
+
+def _chunk_sources() -> dict[str, list[RetrievedQueryResult]]:
+    return {
+        "sys1": [RetrievedQueryResult("q-1", ["c-b", "c-x"])],
+        "sys2": [RetrievedQueryResult("q-1", ["c-a", "c-b"])],
+    }
+
+
+def test_fused_chunk_runs_share_the_derived_chunk_hash_and_compare() -> None:
+    dataset = _chunk_dataset()
+    fused = evaluate_fused_results(
+        dataset=dataset, results=_chunk_sources(), top_k=(1, 2)
+    )
+    plain = evaluate_results(
+        dataset=dataset,
+        retrieved_results=[RetrievedQueryResult("q-1", ["c-a"])],
+        top_k=(1, 2),
+    )
+
+    assert fused.manifest["chunk_hash"] == plain.manifest["chunk_hash"]
+    assert compare_runs(fused, fused).comparability.comparable is True
+
+
+def test_fused_chunk_runs_accept_an_explicit_chunk_hash() -> None:
+    fused = evaluate_fused_results(
+        dataset=_chunk_dataset(),
+        results=_chunk_sources(),
+        top_k=(1, 2),
+        chunk_hash="d" * 64,
+    )
+
+    assert fused.manifest["chunk_hash"] == "d" * 64
+    assert compare_runs(fused, fused).comparability.comparable is True

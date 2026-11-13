@@ -82,6 +82,7 @@ def evaluate_results(
     retrieved_results: Sequence[RetrievedQueryResult],
     top_k: Sequence[int] = (1, 3, 5, 10),
     name: str = "precomputed",
+    chunk_hash: str | None = None,
 ) -> EvaluationResult:
     """Evaluate existing document or chunk rankings with the core metrics.
 
@@ -89,9 +90,20 @@ def evaluate_results(
     Retrieved identifiers are matched directly against the dataset's graded
     relevance at its own level, so a chunk-level dataset takes chunk IDs.
     This entry point performs no indexing, retrieval, I/O, or network access.
+
+    For a chunk-level dataset the manifest records a chunk hash, which the
+    strict comparability contract requires: an explicit ``chunk_hash``
+    asserts the chunk identity of the producing system, and when it is
+    omitted the identity is derived deterministically from the dataset's
+    chunk ID set, so runs over the same chunk set stay comparable while
+    runs over different chunk sets stay blocked. A derived hash certifies
+    the dataset's chunk ID set only, not a chunking configuration; to
+    compare a precomputed run against a runner-produced run, pass that
+    run's ``chunk_hash`` explicitly.
     """
 
     normalized_name = _validate_name(name)
+    normalized_chunk_hash = _validate_chunk_hash(chunk_hash)
     normalized_top_k = normalize_top_k(top_k)
     queries, grades_by_query = _validate_dataset(dataset)
     rankings_by_query = _validate_results(retrieved_results, queries=queries)
@@ -117,6 +129,7 @@ def evaluate_results(
         rankings_by_query=rankings_by_query,
         top_k=normalized_top_k,
         relevance_level=dataset.relevance_level,
+        chunk_hash=normalized_chunk_hash,
     )
     return EvaluationResult(
         run_id=run_id,
@@ -130,6 +143,24 @@ def _validate_name(name: str) -> str:
     if not isinstance(name, str) or not name.strip():
         raise ConfigurationError("name must be a non-empty string")
     return name
+
+
+def _validate_chunk_hash(chunk_hash: str | None) -> str | None:
+    if chunk_hash is None:
+        return None
+    if not isinstance(chunk_hash, str) or not chunk_hash.strip():
+        raise ConfigurationError("chunk_hash must be a non-empty string")
+    return chunk_hash
+
+
+def _chunk_set_hash(grades_by_query: Mapping[str, Mapping[str, int]]) -> str:
+    chunk_ids: list[JSONValue] = []
+    chunk_ids.extend(
+        sorted(
+            {identifier for grades in grades_by_query.values() for identifier in grades}
+        )
+    )
+    return content_hash(chunk_ids)
 
 
 def _validate_dataset(
@@ -189,6 +220,7 @@ def _build_manifest(
     rankings_by_query: Mapping[str, Sequence[str]],
     top_k: Sequence[int],
     relevance_level: RelevanceLevel,
+    chunk_hash: str | None,
 ) -> tuple[dict[str, JSONValue], str]:
     rankings_payload: list[JSONValue] = []
     for query in queries:
@@ -201,6 +233,9 @@ def _build_manifest(
 
     dataset_hash = content_hash(dataset_payload(queries, grades_by_query))
     retrieved_results_hash = content_hash(rankings_payload)
+    resolved_chunk_hash = chunk_hash
+    if resolved_chunk_hash is None and relevance_level == "chunk":
+        resolved_chunk_hash = _chunk_set_hash(grades_by_query)
     run_payload: dict[str, JSONValue] = {
         "dataset_hash": dataset_hash,
         "evaluation_mode": "precomputed",
@@ -210,6 +245,8 @@ def _build_manifest(
         "retrieved_results_hash": retrieved_results_hash,
         "top_k": list(top_k),
     }
+    if resolved_chunk_hash is not None:
+        run_payload["chunk_hash"] = resolved_chunk_hash
     run_id = content_hash(run_payload)
     manifest: dict[str, JSONValue] = {
         **run_payload,

@@ -136,7 +136,7 @@ PDFは技術的には読み込めるが、[PyMuPDF公式ドキュメント](http
 
 検索結果がチャンクの場合、`parent_document_id` で文書へ畳み込み、同じ文書の複数チャンクは最上位のチャンクだけを残す。これにより、1文書を細かく分割したRetrieverが見かけ上有利になることを防ぐ。
 
-`relevance_level: chunk` の場合だけ、正解IDと検索結果IDをチャンクIDで直接照合する。このモードでは、評価データが同一のチャンク設定から生成されていることをハッシュで検証する。
+`relevance_level: chunk` の場合だけ、正解IDと検索結果IDをチャンクIDで直接照合する。このモードでは、評価データが同一のチャンク設定から生成されていることをハッシュで検証する。事前計算評価ではチャンク設定そのものを持たないため、検証対象はデータセットのチャンクID集合の同一性になる（§11 参照）。
 
 ### 5.4 検索結果契約
 
@@ -382,6 +382,8 @@ chunk_hash  = hash(corpus_hash + chunker config + chunker version)
 index_hash  = hash(chunk_hash + retriever config + implementation version)
 run_hash    = hash(index_hash + dataset hash + evaluation config)
 ```
+
+事前計算評価（`evaluate_results` / `evaluate_fused_results`）にはコーパスもチャンカーも存在しないため、その manifest の `chunk_hash` は上記とは別系統の同一性とする。呼び出し側が `chunk_hash` を明示した場合はその値をそのまま記録する。チャンクレベル（`relevance_level: chunk`）のデータセットで省略された場合は、データセットのチャンクID集合（qrels キー全体）から決定的に導出する。導出ハッシュが保証するのはチャンクID集合の同一性だけであり、チャンク設定の同一性ではない。文書レベルのデータセットでは導出は行わず、明示された場合にだけ記録され、run の同一性に加わる。Runner が生成した run と事前計算 run を比較する場合は、Runner 側の `chunk_hash` を明示的に渡すこと。
 
 ディレクトリ:
 
