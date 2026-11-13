@@ -54,8 +54,8 @@ corpus or an index.
 - `EvaluationDataset` — An immutable set of queries and their graded relevance judgments.
 - `RelevanceLevel` — Literal selecting document-level or chunk-level relevance.
 - `validate_dataset` — Validate dataset-to-corpus identifiers at the explicit relevance level.
-- `RetrievedQueryResult` — An immutable document ranking produced by an existing search system.
-- `evaluate_results` — Evaluate existing document rankings using Retrieval Lab's core metrics.
+- `RetrievedQueryResult` — An immutable ranking produced by an existing search system.
+- `evaluate_results` — Evaluate existing document or chunk rankings with the core metrics.
 - `load_documents` — Load supported local documents in deterministic source-path order.
 
 ## Hybrid fusion of precomputed rankings
