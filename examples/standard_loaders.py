@@ -1,4 +1,4 @@
-"""Load MS MARCO and Natural Questions benchmarks and evaluate one.
+"""Load MS MARCO and Natural Questions benchmarks and evaluate both.
 
 The MS MARCO fixture uses the published passage layout
 (``collection.tsv``, ``queries.<split>.tsv``, TREC ``qrels.<split>.tsv``);
