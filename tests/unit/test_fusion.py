@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -396,3 +397,42 @@ def test_evaluate_fused_results_scores_empty_rankings_as_zero() -> None:
     fused = evaluate_fused_results(dataset=_dataset(), results=sources, top_k=(1,))
 
     assert fused.metrics["hybrid"].metrics_by_cutoff[1]["recall"] == 0.0
+
+
+def test_evaluate_fused_results_supports_chunk_level_datasets() -> None:
+    dataset = EvaluationDataset(
+        queries=[
+            EvaluationQuery(
+                id="q-1",
+                query="first query",
+                relevant_chunk_ids={"c-a", "c-b"},
+            )
+        ],
+        relevance_level="chunk",
+        relevance_grades_by_query={"q-1": {"c-a": 2, "c-b": 1}},
+    )
+    sources = {
+        "sys1": [RetrievedQueryResult("q-1", ["c-b", "c-x"])],
+        "sys2": [RetrievedQueryResult("q-1", ["c-a", "c-b"])],
+    }
+
+    fused = evaluate_fused_results(dataset=dataset, results=sources, top_k=(1, 2))
+
+    # RRF with k=60: c-b scores 1/61 + 1/62, ahead of c-a (1/61) and c-x (1/62).
+    assert fused.query_results["hybrid"][0].retrieved_ids == ("c-b", "c-a", "c-x")
+    metrics = fused.metrics["hybrid"].metrics_by_cutoff
+    assert metrics[1] == {
+        "ap": 1.0,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "ndcg": pytest.approx(1.0 / 3.0),
+        "precision": 1.0,
+        "recall": 0.5,
+    }
+    # Gains are [1, 3] observed and [3, 1] ideal.
+    expected_ndcg_at_2 = (1.0 + 3.0 / math.log2(3)) / (3.0 + 1.0 / math.log2(3))
+    assert metrics[2]["ndcg"] == pytest.approx(expected_ndcg_at_2)
+    assert metrics[2]["recall"] == 1.0
+    assert metrics[2]["ap"] == 1.0
+    assert fused.manifest["relevance_level"] == "chunk"
+    assert fused.manifest["fusion"] == {"rrf_k": 60, "sources": ["sys1", "sys2"]}
