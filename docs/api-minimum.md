@@ -330,7 +330,7 @@ dataset's graded relevance at its own level: a document-level dataset takes
 document IDs, and a chunk-level dataset takes chunk IDs, with no chunker or corpus
 involved. The dataset's relevance level is recorded in the manifest and run ID.
 
-`fuse_rankings()` fuses named document-ID rankings with reciprocal-rank fusion
+`fuse_rankings()` fuses named identifier rankings with reciprocal-rank fusion
 (`rrf_k=60` by default; one-based ranks, source scores ignored — the same RRF
 rule as `HybridRetriever`, but summed exactly here so mathematical ties always
 break by identifier). `fuse_results()` applies it
@@ -338,7 +338,8 @@ per query across two or more sources that cover identical query ID sets, and
 `evaluate_fused_results()` evaluates the fused rankings through
 `evaluate_results()`, so a fused run is a first-class `EvaluationResult` that
 `compare_runs()` can diff against other fused runs (for example across
-`rrf_k` values or source sets).
+`rrf_k` values or source sets). The identifiers follow the dataset's relevance
+level, so chunk rankings fuse and evaluate the same way.
 
 ## Result contract
 
