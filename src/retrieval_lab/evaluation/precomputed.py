@@ -1,4 +1,4 @@
-"""Evaluate pre-ranked document identifiers without running retrieval."""
+"""Evaluate pre-ranked identifiers without running retrieval."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from retrieval_lab.datasets import EvaluationDataset
+from retrieval_lab.datasets import EvaluationDataset, RelevanceLevel
 from retrieval_lab.domain import (
     EvaluationQuery,
     EvaluationResult,
@@ -29,10 +29,11 @@ from retrieval_lab.exceptions import (
 
 @dataclass(frozen=True, init=False)
 class RetrievedQueryResult:
-    """An immutable document ranking produced by an existing search system.
+    """An immutable ranking produced by an existing search system.
 
-    An empty ranking is valid and receives zero for every quality metric. Document
-    identifiers must be unique, non-empty strings in best-to-worst rank order.
+    An empty ranking is valid and receives zero for every quality metric.
+    Identifiers are document or chunk IDs matching the dataset's relevance
+    level; they must be unique, non-empty strings in best-to-worst rank order.
     """
 
     query_id: str
@@ -82,10 +83,12 @@ def evaluate_results(
     top_k: Sequence[int] = (1, 3, 5, 10),
     name: str = "precomputed",
 ) -> EvaluationResult:
-    """Evaluate existing document rankings using Retrieval Lab's core metrics.
+    """Evaluate existing document or chunk rankings with the core metrics.
 
-    The result set must contain exactly one ranking for every dataset query. This
-    entry point performs no indexing, retrieval, I/O, or network access.
+    The result set must contain exactly one ranking for every dataset query.
+    Retrieved identifiers are matched directly against the dataset's graded
+    relevance at its own level, so a chunk-level dataset takes chunk IDs.
+    This entry point performs no indexing, retrieval, I/O, or network access.
     """
 
     normalized_name = _validate_name(name)
@@ -113,6 +116,7 @@ def evaluate_results(
         grades_by_query=grades_by_query,
         rankings_by_query=rankings_by_query,
         top_k=normalized_top_k,
+        relevance_level=dataset.relevance_level,
     )
     return EvaluationResult(
         run_id=run_id,
@@ -133,10 +137,6 @@ def _validate_dataset(
 ) -> tuple[tuple[EvaluationQuery, ...], dict[str, dict[str, int]]]:
     if not isinstance(dataset, EvaluationDataset):
         raise DatasetValidationError("dataset must be an EvaluationDataset")
-    if dataset.relevance_level != "document":
-        raise DatasetValidationError(
-            "evaluate_results currently supports only document relevance"
-        )
     return dataset.queries, {
         query.id: dict(dataset.relevance_grades_by_query[query.id])
         for query in dataset.queries
@@ -188,6 +188,7 @@ def _build_manifest(
     grades_by_query: Mapping[str, Mapping[str, int]],
     rankings_by_query: Mapping[str, Sequence[str]],
     top_k: Sequence[int],
+    relevance_level: RelevanceLevel,
 ) -> tuple[dict[str, JSONValue], str]:
     rankings_payload: list[JSONValue] = []
     for query in queries:
@@ -205,7 +206,7 @@ def _build_manifest(
         "evaluation_mode": "precomputed",
         "metric_version": 1,
         "name": name,
-        "relevance_level": "document",
+        "relevance_level": relevance_level,
         "retrieved_results_hash": retrieved_results_hash,
         "top_k": list(top_k),
     }

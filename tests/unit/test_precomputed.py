@@ -154,22 +154,101 @@ def test_evaluate_results_requires_exactly_one_result_per_query(
         evaluate_results(dataset=_dataset(), retrieved_results=rankings)
 
 
-def test_evaluate_results_rejects_chunk_relevance_explicitly() -> None:
-    dataset = EvaluationDataset(
+def _chunk_dataset() -> EvaluationDataset:
+    return EvaluationDataset(
         queries=[
             EvaluationQuery(
-                id="q",
-                query="query",
-                relevant_chunk_ids={"chunk"},
-            )
+                id="q-1",
+                query="first query",
+                relevant_chunk_ids={"chunk-a", "chunk-b"},
+            ),
+            EvaluationQuery(
+                id="q-2",
+                query="second query",
+                relevant_chunk_ids={"chunk-c"},
+            ),
         ],
         relevance_level="chunk",
+        relevance_grades_by_query={
+            "q-1": {"chunk-a": 3, "chunk-b": 1},
+            "q-2": {"chunk-c": 1},
+        },
     )
-    with pytest.raises(DatasetValidationError, match="only document"):
-        evaluate_results(
-            dataset=dataset,
-            retrieved_results=[RetrievedQueryResult("q", [])],
-        )
+
+
+def _chunk_rankings() -> list[RetrievedQueryResult]:
+    return [
+        RetrievedQueryResult(
+            query_id="q-1",
+            retrieved_document_ids=["chunk-b", "chunk-x", "chunk-a"],
+        ),
+        RetrievedQueryResult(query_id="q-2", retrieved_document_ids=[]),
+    ]
+
+
+def test_evaluate_results_computes_hand_calculated_chunk_metrics() -> None:
+    result = evaluate_results(
+        dataset=_chunk_dataset(),
+        retrieved_results=_chunk_rankings(),
+        top_k=[3, 1],
+    )
+
+    first = result.query_results["precomputed"][0]
+    aggregate = result.metrics["precomputed"].metrics_by_cutoff
+
+    # Chunk IDs match chunk-level grades directly; the numbers mirror the
+    # document-level hand-calculated example with renamed identifiers.
+    assert first.metrics_by_cutoff[1] == {
+        "ap": 1.0,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "ndcg": pytest.approx(1.0 / 7.0),
+        "precision": 1.0,
+        "recall": 0.5,
+    }
+    assert first.metrics_by_cutoff[3]["recall"] == 1.0
+    assert first.metrics_by_cutoff[3]["ap"] == pytest.approx((1.0 + 2 / 3) / 2)
+    expected_ndcg_at_3 = (1.0 + 7.0 / math.log2(4)) / (7.0 + 1.0 / math.log2(3))
+    assert first.metrics_by_cutoff[3]["ndcg"] == pytest.approx(expected_ndcg_at_3)
+    assert aggregate[1]["recall"] == 0.25
+    assert result.manifest["relevance_level"] == "chunk"
+
+
+def test_relevance_level_is_part_of_the_precomputed_run_identity() -> None:
+    same_ids_at_chunk_level = EvaluationDataset(
+        queries=[
+            EvaluationQuery(
+                id="q-1",
+                query="first query",
+                relevant_chunk_ids={"doc-a", "doc-b"},
+            ),
+            EvaluationQuery(
+                id="q-2",
+                query="second query",
+                relevant_chunk_ids={"doc-c"},
+            ),
+        ],
+        relevance_level="chunk",
+        relevance_grades_by_query={
+            "q-1": {"doc-a": 3, "doc-b": 1},
+            "q-2": {"doc-c": 1},
+        },
+    )
+    document = evaluate_results(
+        dataset=_dataset(),
+        retrieved_results=_rankings(),
+        top_k=[1, 3],
+    )
+    chunk = evaluate_results(
+        dataset=same_ids_at_chunk_level,
+        retrieved_results=_rankings(),
+        top_k=[1, 3],
+    )
+
+    assert document.manifest["relevance_level"] == "document"
+    assert chunk.manifest["relevance_level"] == "chunk"
+    assert document.run_id != chunk.run_id
+    assert document.metrics == chunk.metrics
 
 
 def test_evaluate_results_is_deterministic_and_uses_custom_name() -> None:

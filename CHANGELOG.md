@@ -13,6 +13,12 @@ cut.
 
 ### Added
 
+- Chunk-level precomputed evaluation: `evaluate_results()` now accepts a
+  chunk-level `EvaluationDataset` and matches retrieved chunk IDs directly
+  against its chunk-level grades, so rankings produced by an external
+  chunk search system can be scored without the built-in retrievers. The
+  dataset's relevance level is recorded in the manifest and run ID;
+  document-level run IDs are unchanged.
 - Executable example: `examples/standard_loaders.py` loads miniature
   MS MARCO (`examples/msmarco-mini/`) and Natural Questions
   (`examples/nq-mini.jsonl`) fixtures with `load_msmarco_dataset()`

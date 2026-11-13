@@ -325,7 +325,10 @@ against the supplied corpus.
 
 `evaluate_results()` accepts exactly one `RetrievedQueryResult` for every dataset
 query. It computes the same metrics and dataset hash as `EvaluationRunner` without
-indexing or retrieval. Precomputed chunk rankings are not yet supported.
+indexing or retrieval. The retrieved identifiers are matched directly against the
+dataset's graded relevance at its own level: a document-level dataset takes
+document IDs, and a chunk-level dataset takes chunk IDs, with no chunker or corpus
+involved. The dataset's relevance level is recorded in the manifest and run ID.
 
 `fuse_rankings()` fuses named document-ID rankings with reciprocal-rank fusion
 (`rrf_k=60` by default; one-based ranks, source scores ignored — the same RRF
