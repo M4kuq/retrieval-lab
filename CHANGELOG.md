@@ -13,6 +13,10 @@ cut.
 
 ### Added
 
+- Executable example: `examples/standard_loaders.py` loads miniature
+  MS MARCO (`examples/msmarco-mini/`) and Natural Questions
+  (`examples/nq-mini.jsonl`) fixtures with `load_msmarco_dataset()`
+  and `load_natural_questions_dataset()` and evaluates both.
 - Executable example: `examples/comparison_statistics.py` compares two
   precomputed runs with `compare_runs()`, attaches a bootstrap
   confidence interval to the recall@1 delta with

@@ -56,6 +56,19 @@ def test_comparison_statistics_example_runs_without_network_access() -> None:
     assert namespace["comparison"].comparability.comparable is True
 
 
+def test_standard_loaders_example_runs_without_network_access() -> None:
+    namespace = runpy.run_path("examples/standard_loaders.py")
+
+    msmarco = namespace["msmarco"]
+    assert msmarco.excluded_query_ids == ("q3",)
+    assert msmarco.dataset.relevance_grades_by_query["q1"] == {"p1": 2, "p2": 1}
+    assert namespace["result"].metrics["bm25"].recall_at(3) == 1.0
+    natural_questions = namespace["natural_questions"]
+    assert natural_questions.excluded_query_ids == ("103",)
+    assert natural_questions.dataset.relevance_grades_by_query["101"] == {"101": 1}
+    assert namespace["nq_result"].metrics["bm25"].recall_at(1) == 1.0
+
+
 def test_checkpoint_resume_example_runs_without_network_access() -> None:
     namespace = runpy.run_path("examples/checkpoint_resume.py")
 
