@@ -13,6 +13,10 @@ cut.
 
 ### Added
 
+- Executable example: `examples/comparison_statistics.py` compares two
+  precomputed runs with `compare_runs()`, attaches a bootstrap
+  confidence interval to the recall@1 delta with
+  `bootstrap_metric_delta()`, and saves the standalone HTML diff report.
 - Executable example: `examples/checkpoint_resume.py` simulates a crash
   during a checkpointed evaluation and resumes with
   `run_with_checkpoint()`, running only the queries missing from the

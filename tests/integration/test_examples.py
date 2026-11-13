@@ -46,6 +46,16 @@ def test_japanese_python_examples_run_without_network_access() -> None:
         assert namespace["result"].schema_version == 1
 
 
+def test_comparison_statistics_example_runs_without_network_access() -> None:
+    namespace = runpy.run_path("examples/comparison_statistics.py")
+
+    bootstrap = namespace["bootstrap"]
+    assert bootstrap.observed_delta == 1.0
+    assert (bootstrap.ci_lower, bootstrap.ci_upper) == (1.0, 1.0)
+    assert bootstrap.significant is True
+    assert namespace["comparison"].comparability.comparable is True
+
+
 def test_checkpoint_resume_example_runs_without_network_access() -> None:
     namespace = runpy.run_path("examples/checkpoint_resume.py")
 
