@@ -76,7 +76,7 @@ complete, and pushing the version tag remains the explicit approval act:
 Each action below may run only after the user gives explicit approval for
 that specific publication action:
 
-- [ ] Create and push the version tag (for example `v0.1.0rc1`); the tag name
+- [ ] Create and push the version tag (`v<version>`); the tag name
       must match the `pyproject.toml` version exactly, which the workflow
       verifies before building. If the tag carries a new version, cut it
       first by following the tag-time procedure above.
