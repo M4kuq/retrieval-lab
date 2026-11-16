@@ -15,6 +15,7 @@ nav:
   - Tutorial: tutorial.md
   - Public demo: demo.md
   - Answer evaluation: answer-evaluation.md
+  - Dataset authoring: dataset-authoring.md
   - FAQ: faq.md
   - CI regression gates: ci-regression.md
   - API minimum: api-minimum.md

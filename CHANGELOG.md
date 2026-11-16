@@ -50,6 +50,11 @@ cut.
   synthetic origin), finalization, dataset inspection, and evaluation;
   the example runs as an integration test so it cannot drift from the
   public API.
+- Documentation: a dataset authoring guide (`docs/dataset-authoring.md`,
+  in the site navigation and the sdist) covering the draft lifecycle,
+  provenance and reliability semantics, the persisted review workflow
+  and its CLI, the inspection diagnostics, and the synthetic
+  generation trust rules.
 - CLI `--version`: `retrieval-lab --version` prints the installed
   package version and exits without running an evaluation.
 - Run diff report: `RunComparison.to_html()` / `save_html(path)` (and
