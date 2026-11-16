@@ -5,7 +5,9 @@ born experimental and unreviewed. The draft gains two hand-written
 queries, is saved as a bundle, moves through the persisted review
 workflow until a human marks it reviewed (its synthetic origin is never
 rewritten), is finalized, inspected for quality issues, and only then
-evaluated.
+evaluated. The rankings scored at the end are built from the finalized
+judgments themselves; they stand in for a real retriever's output so
+the example stays self-contained.
 """
 
 import json
@@ -54,7 +56,7 @@ DOCUMENTS = (
 def _phrase_queries(
     documents: Sequence[Document], count: int, seed: int
 ) -> list[DraftQuery]:
-    queries = []
+    queries: list[DraftQuery] = []
     for index in range(count):
         document = documents[(seed + index) % len(documents)]
         phrase = " ".join(document.text.split()[1:6])
@@ -95,6 +97,10 @@ with tempfile.TemporaryDirectory() as directory:
     assert initial_status.pending_query_ids == ()
 
     mark_draft_in_review(load_dataset_draft(bundle)).save_bundle(bundle)
+    in_review_status = dataset_draft_status(bundle)
+    assert in_review_status.review_status == "in_review"
+    assert in_review_status.origin == "synthetic"
+    assert in_review_status.reliability == "experimental"
 
     reviewed_status = review_dataset_query(
         bundle,
@@ -111,6 +117,11 @@ with tempfile.TemporaryDirectory() as directory:
 
     final_status = finalize_dataset_bundle(bundle)
     assert final_status.query_count == 5
+    # The status above is reloaded from the saved bundle, so these
+    # asserts pin the provenance that actually reached disk.
+    assert final_status.review_status == "reviewed"
+    assert final_status.origin == "synthetic"
+    assert final_status.reliability == "reviewed"
     dataset = load_dataset_draft(bundle).finalize()
 
 report = inspect_dataset(dataset, documents=DOCUMENTS)

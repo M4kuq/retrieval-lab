@@ -124,19 +124,45 @@ def test_dataset_authoring_example_runs_without_network_access() -> None:
     assert initial.review_status == "unreviewed"
     assert initial.reliability == "experimental"
     assert initial.query_count == 5
+    in_review = namespace["in_review_status"]
+    assert in_review.review_status == "in_review"
+    assert in_review.origin == "synthetic"
+    assert in_review.reliability == "experimental"
     # Completing review flips the review state and reliability label but
     # never rewrites the synthetic origin.
     reviewed = namespace["reviewed_status"]
     assert reviewed.review_status == "reviewed"
     assert reviewed.origin == "synthetic"
     assert reviewed.reliability == "reviewed"
-    assert namespace["final_status"].query_count == 5
-    codes = {issue.code for issue in namespace["report"].issues}
-    assert codes == {
+    # final_status is reloaded from the saved bundle, so it pins the
+    # provenance that actually reached disk.
+    final = namespace["final_status"]
+    assert final.query_count == 5
+    assert final.review_status == "reviewed"
+    assert final.origin == "synthetic"
+    assert final.reliability == "reviewed"
+    by_code: dict[str, list] = {}
+    for issue in namespace["report"].issues:
+        by_code.setdefault(issue.code, []).append(issue)
+    assert set(by_code) == {
         "duplicate_query_text",
         "relevance_concentration",
         "verbatim_query_in_relevant_text",
     }
+    duplicate = by_code["duplicate_query_text"]
+    assert len(duplicate) == 1
+    assert duplicate[0].query_ids == ("sq-1", "sq-4")
+    concentration = by_code["relevance_concentration"]
+    assert len(concentration) == 1
+    assert concentration[0].query_ids == ("sq-1", "sq-4", "sq-5")
+    assert concentration[0].relevance_ids == ("d-refund",)
+    verbatim = by_code["verbatim_query_in_relevant_text"]
+    assert sorted(issue.query_ids[0] for issue in verbatim) == [
+        "sq-1",
+        "sq-2",
+        "sq-3",
+        "sq-4",
+    ]
     assert namespace["result"].metrics["authored"].recall_at(1) == 1.0
 
 
