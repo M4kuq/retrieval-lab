@@ -16,6 +16,7 @@ import tomllib
 import zipfile
 from pathlib import Path, PurePosixPath
 
+import pytest
 import yaml
 
 from retrieval_lab import Document, EvaluationQuery, EvaluationRunner
@@ -68,6 +69,18 @@ def test_readme_install_guidance_uses_the_distribution_name() -> None:
     targets = re.findall(r"pip install\s+['\"]?([\w.-]+)", readme)
     assert targets
     assert all(target == "retrieval-lab-sdk" for target in targets)
+
+
+def test_readme_quick_start_block_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Quick start", 1)[1]
+    blocks = re.findall(r"```python\n(.*?)```", section, flags=re.DOTALL)
+    assert blocks
+    monkeypatch.chdir(tmp_path)
+    exec(compile(blocks[0], "README.md quick start", "exec"), {})
+    assert (tmp_path / "artifacts" / "result.json").is_file()
 
 
 def test_index_python_snippets_run() -> None:
