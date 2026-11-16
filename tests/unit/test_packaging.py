@@ -6,9 +6,11 @@ import contextlib
 import email
 import io
 import json
+import os
 import re
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tomllib
 import zipfile
@@ -301,6 +303,162 @@ def test_clean_build_artifacts_have_expected_content_and_metadata(
             PurePosixPath(name).name.lower() in {".env", "id_rsa", "credentials"}
             for name in sdist_names
         )
+
+
+def test_built_wheel_runs_the_quickstart_and_cli_from_an_isolated_install(
+    tmp_path: Path,
+) -> None:
+    dist_dir = tmp_path / "dist"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--no-isolation",
+            "--wheel",
+            "--outdir",
+            str(dist_dir),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (wheel_path,) = dist_dir.glob("*.whl")
+    bootstrap_dir = tmp_path / "bootstrap"
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(bootstrap_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if os.name == "nt":
+        bootstrap_python = bootstrap_dir / "Scripts" / "python.exe"
+    else:
+        bootstrap_python = bootstrap_dir / "bin" / "python"
+    site_dir = tmp_path / "site"
+    subprocess.run(
+        [
+            str(bootstrap_python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-index",
+            "--target",
+            str(site_dir),
+            str(wheel_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = pyproject["project"]["version"]
+
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(site_dir), sysconfig.get_paths()["purelib"])
+    )
+    script_candidates = (
+        site_dir / "bin" / "retrieval-lab",
+        site_dir / "bin" / "retrieval-lab.exe",
+        site_dir / "Scripts" / "retrieval-lab.exe",
+        site_dir / "Scripts" / "retrieval-lab",
+    )
+    script = next(
+        (candidate for candidate in script_candidates if candidate.is_file()), None
+    )
+    assert script is not None
+    scripted = subprocess.run(
+        [str(script), "--version"],
+        cwd=tmp_path,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert scripted.stdout.strip() == f"retrieval-lab {version}"
+
+    index_text = (ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```python\n(.*?)```", index_text, flags=re.DOTALL)
+    assert blocks
+    driver = tmp_path / "wheel_smoke_driver.py"
+    driver.write_text(
+        "import sys\n\n"
+        "import retrieval_lab\n"
+        "from retrieval_lab.cli.app import main\n\n"
+        "assert retrieval_lab.__file__.startswith(sys.argv[1])\n\n"
+        + "\n".join(blocks)
+        + "\n\ntry:\n"
+        "    main(['--version'])\n"
+        "except SystemExit as error:\n"
+        "    assert error.code == 0, error.code\n"
+        "else:\n"
+        "    raise AssertionError('CLI --version did not exit')\n"
+        "print('WHEEL_SMOKE_OK')\n",
+        encoding="utf-8",
+    )
+    driven = subprocess.run(
+        [sys.executable, str(driver), str(site_dir)],
+        cwd=tmp_path,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "1.0" in driven.stdout
+    assert f"retrieval-lab {version}" in driven.stdout
+    assert "WHEEL_SMOKE_OK" in driven.stdout
+
+
+def test_a_wheel_can_be_built_from_the_sdist(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--no-isolation",
+            "--sdist",
+            "--outdir",
+            str(dist_dir),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (sdist_path,) = dist_dir.glob("*.tar.gz")
+    extracted = tmp_path / "extracted"
+    with tarfile.open(sdist_path, mode="r:gz") as sdist:
+        sdist.extractall(extracted, filter="data")
+    (project_dir,) = extracted.iterdir()
+    wheel_dir = tmp_path / "wheel-from-sdist"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--no-isolation",
+            "--wheel",
+            "--outdir",
+            str(wheel_dir),
+        ],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (wheel_path,) = wheel_dir.glob("*.whl")
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    with zipfile.ZipFile(wheel_path) as wheel:
+        wheel_names = tuple(wheel.namelist())
+        assert "retrieval_lab/py.typed" in wheel_names
+        metadata_name = next(name for name in wheel_names if name.endswith("METADATA"))
+        metadata = email.message_from_bytes(wheel.read(metadata_name))
+        assert metadata["Name"] == "retrieval-lab-sdk"
+        assert metadata["Version"] == pyproject["project"]["version"]
 
 
 def _nav_paths(value: object) -> set[str]:
