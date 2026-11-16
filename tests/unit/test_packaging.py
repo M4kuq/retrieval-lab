@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tomllib
 import zipfile
@@ -324,10 +325,21 @@ def test_built_wheel_runs_the_quickstart_and_cli_from_an_isolated_install(
         text=True,
     )
     (wheel_path,) = dist_dir.glob("*.whl")
+    bootstrap_dir = tmp_path / "bootstrap"
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(bootstrap_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if os.name == "nt":
+        bootstrap_python = bootstrap_dir / "Scripts" / "python.exe"
+    else:
+        bootstrap_python = bootstrap_dir / "bin" / "python"
     site_dir = tmp_path / "site"
     subprocess.run(
         [
-            sys.executable,
+            str(bootstrap_python),
             "-m",
             "pip",
             "install",
@@ -345,7 +357,9 @@ def test_built_wheel_runs_the_quickstart_and_cli_from_an_isolated_install(
     version = pyproject["project"]["version"]
 
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(site_dir)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(site_dir), sysconfig.get_paths()["purelib"])
+    )
     script_candidates = (
         site_dir / "bin" / "retrieval-lab",
         site_dir / "bin" / "retrieval-lab.exe",
