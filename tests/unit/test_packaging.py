@@ -346,8 +346,16 @@ def test_built_wheel_runs_the_quickstart_and_cli_from_an_isolated_install(
 
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(site_dir)
-    scripts_dir = site_dir / ("Scripts" if os.name == "nt" else "bin")
-    script = scripts_dir / ("retrieval-lab.exe" if os.name == "nt" else "retrieval-lab")
+    script_candidates = (
+        site_dir / "bin" / "retrieval-lab",
+        site_dir / "bin" / "retrieval-lab.exe",
+        site_dir / "Scripts" / "retrieval-lab.exe",
+        site_dir / "Scripts" / "retrieval-lab",
+    )
+    script = next(
+        (candidate for candidate in script_candidates if candidate.is_file()), None
+    )
+    assert script is not None
     scripted = subprocess.run(
         [str(script), "--version"],
         cwd=tmp_path,
