@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from retrieval_lab import compare_runs, evaluate_results, load_result
+from retrieval_lab import (
+    DatasetInspectionIssue,
+    compare_runs,
+    evaluate_results,
+    load_result,
+)
 
 
 def test_file_input_example_runs_without_network_access() -> None:
@@ -114,6 +119,56 @@ def test_chunk_rankings_example_outputs_are_comparable() -> None:
     comparison = compare_runs(vector, rerun)
     assert comparison.comparability.comparable is True
     assert set(comparison.comparisons) == {"vector"}
+
+
+def test_dataset_authoring_example_runs_without_network_access() -> None:
+    namespace = runpy.run_path("examples/dataset_authoring.py")
+
+    initial = namespace["initial_status"]
+    assert initial.origin == "synthetic"
+    assert initial.review_status == "unreviewed"
+    assert initial.reliability == "experimental"
+    assert initial.query_count == 5
+    in_review = namespace["in_review_status"]
+    assert in_review.review_status == "in_review"
+    assert in_review.origin == "synthetic"
+    assert in_review.reliability == "experimental"
+    # Completing review flips the review state and reliability label but
+    # never rewrites the synthetic origin.
+    reviewed = namespace["reviewed_status"]
+    assert reviewed.review_status == "reviewed"
+    assert reviewed.origin == "synthetic"
+    assert reviewed.reliability == "reviewed"
+    # final_status is reloaded from the saved bundle, so it pins the
+    # provenance that actually reached disk.
+    final = namespace["final_status"]
+    assert final.query_count == 5
+    assert final.review_status == "reviewed"
+    assert final.origin == "synthetic"
+    assert final.reliability == "reviewed"
+    by_code: dict[str, list[DatasetInspectionIssue]] = {}
+    for issue in namespace["report"].issues:
+        by_code.setdefault(issue.code, []).append(issue)
+    assert set(by_code) == {
+        "duplicate_query_text",
+        "relevance_concentration",
+        "verbatim_query_in_relevant_text",
+    }
+    duplicate = by_code["duplicate_query_text"]
+    assert len(duplicate) == 1
+    assert duplicate[0].query_ids == ("sq-1", "sq-4")
+    concentration = by_code["relevance_concentration"]
+    assert len(concentration) == 1
+    assert concentration[0].query_ids == ("sq-1", "sq-4", "sq-5")
+    assert concentration[0].relevance_ids == ("d-refund",)
+    verbatim = by_code["verbatim_query_in_relevant_text"]
+    assert sorted(issue.query_ids[0] for issue in verbatim) == [
+        "sq-1",
+        "sq-2",
+        "sq-3",
+        "sq-4",
+    ]
+    assert namespace["result"].metrics["authored"].recall_at(1) == 1.0
 
 
 def test_checkpoint_resume_example_runs_without_network_access() -> None:

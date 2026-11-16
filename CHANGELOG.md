@@ -43,6 +43,13 @@ cut.
   evaluates the keyword and BM25 strategies on it, and fuses the two
   rankings with `evaluate_fused_results()`; the example runs as an
   integration test so it cannot drift from the public API.
+- Executable example: `examples/dataset_authoring.py` walks the v0.2
+  dataset-authoring workflow end to end: deterministic synthetic
+  generation behind the provider boundary, bundle persistence, the
+  persisted review workflow (review completion never rewrites the
+  synthetic origin), finalization, dataset inspection, and evaluation;
+  the example runs as an integration test so it cannot drift from the
+  public API.
 - CLI `--version`: `retrieval-lab --version` prints the installed
   package version and exits without running an evaluation.
 - Run diff report: `RunComparison.to_html()` / `save_html(path)` (and
