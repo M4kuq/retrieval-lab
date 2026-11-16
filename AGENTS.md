@@ -4,7 +4,8 @@
 
 - Retrieval Lab is a local-first Python SDK for comparing and regression-testing RAG retrieval strategies on a user's own corpus.
 - The public Python API is the primary application interface. Any CLI must be a thin adapter over that API and must not contain evaluation logic.
-- v0.1 covers retrieval evaluation only. Do not add answer generation, LLM judges, web crawling, cloud upload, or provider-specific vector database dependencies.
+- Retrieval evaluation is the core scope. Answer evaluation, RAG quality metrics, and LLM-as-a-judge are shipped extensions of that core: they operate on caller-supplied generators, claim assessments, and judge callables, and must stay provider-independent — no bundled provider client and no provider-specific vector database dependency.
+- Web crawling and cloud upload remain out of scope.
 - Core behavior must work without network access, paid APIs, or heavyweight ML dependencies.
 - Keep domain models and metric logic independent from optional external libraries.
 
