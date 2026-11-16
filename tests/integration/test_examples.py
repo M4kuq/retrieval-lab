@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from retrieval_lab import compare_runs, evaluate_results, load_result
+from retrieval_lab import (
+    DatasetInspectionIssue,
+    compare_runs,
+    evaluate_results,
+    load_result,
+)
 
 
 def test_file_input_example_runs_without_network_access() -> None:
@@ -141,7 +146,7 @@ def test_dataset_authoring_example_runs_without_network_access() -> None:
     assert final.review_status == "reviewed"
     assert final.origin == "synthetic"
     assert final.reliability == "reviewed"
-    by_code: dict[str, list] = {}
+    by_code: dict[str, list[DatasetInspectionIssue]] = {}
     for issue in namespace["report"].issues:
         by_code.setdefault(issue.code, []).append(issue)
     assert set(by_code) == {
