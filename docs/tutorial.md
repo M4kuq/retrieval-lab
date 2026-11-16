@@ -145,6 +145,24 @@ bootstrap の信頼区間と p 値を付けられます（seed で決定的で�
 比較結果は `RunComparison.to_html()` / `save_html(path)` で、単独で開ける
 HTML の diff レポートとしても書き出せます。
 
+### 評価データセットを作成する
+
+評価データ自体は `DatasetDraft` で作成します。draft は出自（origin）と
+人手レビューの状態を provenance として保持し、判定が揃うまで
+`finalize()` で `EvaluationDataset` にできません。合成生成は provider
+境界の内側で行われ、生成された draft は `experimental`（未レビュー）と
+明示されます。レビューを完了しても origin は書き換わりません。
+`inspect_dataset()` は重複クエリ、正解の偏り、文書にそのまま現れる
+低難易度候補を、データセットを書き換えずに報告します。永続化した
+bundle のレビューは `retrieval-lab dataset review` からも行えます。
+生成から検査・評価までを通す実行可能な最小例が
+`examples/dataset_authoring.py` で、手順と信頼ラベルの意味は
+`docs/dataset-authoring.md` にあります。
+
+```console
+uv run python examples/dataset_authoring.py
+```
+
 ## Checks
 
 次の小さな確認で、入力が実際に使われていることを確かめられます。

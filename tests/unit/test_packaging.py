@@ -121,6 +121,7 @@ def test_mkdocs_nav_is_user_facing_only() -> None:
         "tutorial.md",
         "demo.md",
         "answer-evaluation.md",
+        "dataset-authoring.md",
         "faq.md",
         "ci-regression.md",
         "api-minimum.md",

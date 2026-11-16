@@ -15,6 +15,7 @@ feature and can use an injected local embedding backend.
 - Browse the [API reference](https://github.com/M4kuq/retrieval-lab/blob/main/docs/api-reference.md) for every public name, grouped by task.
 - Run the [Python quickstart example](https://github.com/M4kuq/retrieval-lab/blob/main/examples/api_quickstart.py) against the bundled Japanese sample corpus.
 - Use the [CI regression guide](https://github.com/M4kuq/retrieval-lab/blob/main/docs/ci-regression.md) for saved-run quality gates.
+- Read the [dataset authoring guide](https://github.com/M4kuq/retrieval-lab/blob/main/docs/dataset-authoring.md) to build evaluation datasets with explicit provenance and human-review state.
 - Check the [FAQ](https://github.com/M4kuq/retrieval-lab/blob/main/docs/faq.md) for relevance, latency, and optional Dense behavior.
 
 All examples and documentation builds are offline-safe. Saved results are
