@@ -50,6 +50,7 @@ def test_release_metadata_and_manifest_are_explicit() -> None:
             "tutorial.md",
             "demo.md",
             "answer-evaluation.md",
+            "dataset-authoring.md",
             "faq.md",
             "api-minimum.md",
             "api-reference.md",

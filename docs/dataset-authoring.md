@@ -32,9 +32,9 @@ evaluation JSONL form, and `save_bundle(directory)` writes that JSONL
 plus a `dataset-manifest.json` sidecar (schema version 1) recording
 the relevance level, the provenance, the query count, and the pending
 query IDs. `load_dataset_draft(bundle)` reads a bundle back and
-rejects it if the manifest disagrees with the JSONL — including a
-`human_reviewed` or `reliability` value that contradicts the stored
-origin and review status.
+rejects it if `query_count` or `pending_query_ids` disagree with the
+JSONL, or if the manifest's `human_reviewed` / `reliability` values
+contradict its own origin and review status.
 
 ## Provenance and review state
 
@@ -54,9 +54,13 @@ Its derived `reliability` label is what reports and statuses show
 
 Review transitions are explicit: `mark_draft_in_review()` and
 `mark_draft_reviewed()` return a draft with only the review status
-(and notes) changed. Completing review never rewrites the origin — a
-reviewed synthetic dataset stays `origin=synthetic`; only its
-reliability label changes.
+(and notes) changed. The review transitions — and the persisted
+review service below — never rewrite the origin: a reviewed synthetic
+dataset stays `origin=synthetic`, and only its reliability label
+changes. The lower-level `with_provenance()` is different: it
+replaces the whole provenance record with whatever the caller
+supplies, so relabeling a draft through it is the caller's explicit
+responsibility, not something the review flow does.
 
 The provenance lives in the draft and bundle layer. `finalize()`
 produces a plain `EvaluationDataset`, which has no provenance field,
@@ -85,13 +89,14 @@ The CLI is a thin adapter over these services:
 ```console
 retrieval-lab dataset status BUNDLE [--json]
 retrieval-lab dataset review BUNDLE --corpus CORPUS --query-id ID \
-    [--relevant ID[:GRADE] ...] [--complete-review] [--notes TEXT] [--json]
+    [--relevant ID[:GRADE]]... [--complete-review] [--notes TEXT] [--json]
 retrieval-lab dataset finalize BUNDLE [--json]
 ```
 
-Without `--relevant`, `dataset review` prompts interactively: it
-prints the query and the corpus documents, then reads comma-separated
-document IDs (with optional grades) from standard input.
+Repeat `--relevant` once per positive document. Without
+`--relevant`, `dataset review` prompts interactively: it prints the
+query and the corpus documents, then reads comma-separated document
+IDs (with optional grades) from standard input.
 
 ## Inspection
 
@@ -124,8 +129,10 @@ IDs, every query carrying positive judgments that reference the given
 documents) and stamps the draft's provenance itself:
 `origin=synthetic`, `review_status=unreviewed`, the generator's name,
 and the seed in the notes. The resulting draft is experimental by
-construction; it becomes `reviewed` only through the explicit review
-transitions above, and its origin stays `synthetic` afterwards.
+construction. The review transitions and the review service can move
+it to `reviewed`, and they never change its origin; as noted above,
+only the caller-responsibility `with_provenance()` replaces the
+provenance record wholesale.
 
 ## End to end
 
