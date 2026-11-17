@@ -34,6 +34,20 @@ def _write_beir(
     return root
 
 
+def _write_beir_raw(root: Path, *, corpus: str, queries: str, qrels: str) -> Path:
+    (root / "qrels").mkdir(parents=True)
+    (root / "corpus.jsonl").write_text(corpus, encoding="utf-8")
+    (root / "queries.jsonl").write_text(queries, encoding="utf-8")
+    (root / "qrels" / "test.tsv").write_text(qrels, encoding="utf-8")
+    return root
+
+
+def _dataset() -> EvaluationDataset:
+    return EvaluationDataset(
+        queries=(EvaluationQuery("q1", "question", frozenset({"d1"})),)
+    )
+
+
 @pytest.fixture
 def beir_dir(tmp_path: Path) -> Path:
     return _write_beir(
@@ -246,39 +260,59 @@ def test_load_beir_dataset_rejects_all_unjudged(tmp_path: Path) -> None:
         load_beir_dataset(root)
 
 
-def _dataset() -> EvaluationDataset:
-    return EvaluationDataset(
-        queries=(EvaluationQuery("q1", "question", frozenset({"d1"})),)
-    )
-
-
-def test_benchmark_dataset_rejects_invalid_members() -> None:
-    document = Document("d1", "body")
-    with pytest.raises(DatasetValidationError, match="documents must not be empty"):
-        BenchmarkDataset(documents=(), dataset=_dataset())
-    with pytest.raises(
-        DatasetValidationError, match=r"documents\[0\] must be a Document"
-    ):
-        BenchmarkDataset(documents=(object(),), dataset=_dataset())  # type: ignore[arg-type]
-    with pytest.raises(
-        DatasetValidationError, match="dataset must be an EvaluationDataset"
-    ):
-        BenchmarkDataset(documents=(document,), dataset=object())  # type: ignore[arg-type]
-    for bad_excluded in (("",), (7,)):
-        with pytest.raises(DatasetValidationError, match="non-empty strings"):
-            BenchmarkDataset(
-                documents=(document,),
-                dataset=_dataset(),
-                excluded_query_ids=bad_excluded,  # type: ignore[arg-type]
-            )
-    with pytest.raises(DatasetValidationError, match="must be unique"):
+@pytest.mark.parametrize(
+    ("members", "match"),
+    [
+        pytest.param(
+            ((), _dataset(), ()),
+            "documents must not be empty",
+            id="empty-documents",
+        ),
+        pytest.param(
+            ((object(),), _dataset(), ()),
+            r"documents\[0\] must be a Document",
+            id="non-document-member",
+        ),
+        pytest.param(
+            ((Document("d1", "body"),), object(), ()),
+            "dataset must be an EvaluationDataset",
+            id="non-dataset",
+        ),
+        pytest.param(
+            ((Document("d1", "body"),), _dataset(), ("",)),
+            "non-empty strings",
+            id="empty-excluded-id",
+        ),
+        pytest.param(
+            ((Document("d1", "body"),), _dataset(), (7,)),
+            "non-empty strings",
+            id="non-string-excluded-id",
+        ),
+        pytest.param(
+            ((Document("d1", "body"),), _dataset(), ("q2", "q2")),
+            "must be unique",
+            id="duplicate-excluded-ids",
+        ),
+    ],
+)
+def test_benchmark_dataset_rejects_invalid_members(
+    members: tuple[tuple[object, ...], object, tuple[object, ...]],
+    match: str,
+) -> None:
+    documents, dataset, excluded_query_ids = members
+    with pytest.raises(DatasetValidationError, match=match):
         BenchmarkDataset(
-            documents=(document,),
-            dataset=_dataset(),
-            excluded_query_ids=("q2", "q2"),
+            documents=documents,  # type: ignore[arg-type]
+            dataset=dataset,  # type: ignore[arg-type]
+            excluded_query_ids=excluded_query_ids,  # type: ignore[arg-type]
         )
+
+
+def test_benchmark_dataset_accepts_valid_members() -> None:
     benchmark = BenchmarkDataset(
-        documents=(document,), dataset=_dataset(), excluded_query_ids=("q2",)
+        documents=(Document("d1", "body"),),
+        dataset=_dataset(),
+        excluded_query_ids=("q2",),
     )
     assert benchmark.excluded_query_ids == ("q2",)
 
@@ -397,14 +431,6 @@ def test_load_beir_dataset_skips_blank_qrels_lines(tmp_path: Path) -> None:
     assert benchmark.dataset.relevance_grades_by_query["q1"] == {"d1": 1, "d2": 2}
 
 
-def _write_beir_raw(root: Path, *, corpus: str, queries: str, qrels: str) -> Path:
-    (root / "qrels").mkdir(parents=True)
-    (root / "corpus.jsonl").write_text(corpus, encoding="utf-8")
-    (root / "queries.jsonl").write_text(queries, encoding="utf-8")
-    (root / "qrels" / "test.tsv").write_text(qrels, encoding="utf-8")
-    return root
-
-
 def test_load_beir_dataset_rejects_blank_and_non_object_jsonl_lines(
     tmp_path: Path,
 ) -> None:
@@ -432,10 +458,10 @@ def test_load_beir_dataset_rejects_blank_and_non_object_jsonl_lines(
 def test_load_beir_dataset_rejects_records_without_usable_ids(
     tmp_path: Path,
 ) -> None:
-    root = _write_beir_raw(
+    root = _write_beir(
         tmp_path / "missing-id",
-        corpus='{"text": "body"}\n',
-        queries='{"_id": "q1", "text": "question"}\n',
+        corpus=[{"text": "body"}],
+        queries=[{"_id": "q1", "text": "question"}],
         qrels="q1\td1\t1\n",
     )
     with pytest.raises(
@@ -443,10 +469,10 @@ def test_load_beir_dataset_rejects_records_without_usable_ids(
     ):
         load_beir_dataset(root)
 
-    root = _write_beir_raw(
+    root = _write_beir(
         tmp_path / "blank-id",
-        corpus='{"_id": "d1", "text": "body"}\n',
-        queries='{"_id": " ", "text": "question"}\n',
+        corpus=[{"_id": "d1", "text": "body"}],
+        queries=[{"_id": " ", "text": "question"}],
         qrels="q1\td1\t1\n",
     )
     with pytest.raises(
