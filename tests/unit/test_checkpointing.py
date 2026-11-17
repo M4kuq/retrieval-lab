@@ -355,3 +355,207 @@ def test_run_with_checkpoint_validates_runner_output(tmp_path: Path) -> None:
     assert len(checkpoint) == 0
     with pytest.raises(EvaluationError):
         run_with_checkpoint(checkpoint, [_query("q1"), _query("q1")], _result)  # type: ignore[arg-type]
+
+
+def test_sync_directory_skips_non_posix_platforms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = EvaluationCheckpoint(tmp_path / "c.jsonl", fingerprint=FINGERPRINT)
+    opened: list[object] = []
+    real_open = os.open
+
+    def recording_open(*args: object, **kwargs: object) -> int:
+        opened.append(args)
+        return real_open(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", recording_open)
+    monkeypatch.setattr(os, "name", "nt")
+    checkpoint._sync_ancestors()
+    assert opened == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="directory sync is POSIX-only")
+def test_sync_directory_tolerates_open_and_fsync_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = EvaluationCheckpoint(tmp_path / "c.jsonl", fingerprint=FINGERPRINT)
+    calls = {"open": 0, "fsync": 0}
+
+    def broken_open(*args: object, **kwargs: object) -> int:
+        calls["open"] += 1
+        raise OSError("simulated open failure")
+
+    monkeypatch.setattr(os, "open", broken_open)
+    checkpoint._sync_ancestors()
+    assert calls["open"] > 0
+    monkeypatch.undo()
+
+    def broken_fsync(descriptor: int) -> None:
+        calls["fsync"] += 1
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(os, "fsync", broken_fsync)
+    checkpoint._sync_ancestors()
+    assert calls["fsync"] > 0
+
+
+def test_checkpoint_rejects_uninspectable_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "c.jsonl"
+    EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+    real_stat = Path.stat
+
+    def broken_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if self == path:
+            raise PermissionError("simulated stat failure")
+        return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    monkeypatch.setattr(Path, "stat", broken_stat)
+    with pytest.raises(EvaluationError, match="cannot inspect checkpoint file"):
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+
+def test_checkpoint_rejects_unreadable_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "c.jsonl"
+    EvaluationCheckpoint(path, fingerprint=FINGERPRINT).record(_result("q1"))
+
+    def broken_read_bytes(self: Path) -> bytes:
+        raise PermissionError("simulated read failure")
+
+    monkeypatch.setattr(Path, "read_bytes", broken_read_bytes)
+    with pytest.raises(EvaluationError, match="cannot read checkpoint file"):
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+
+def test_record_tolerates_checkpoint_vanishing_before_separator_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "vanish.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    checkpoint.record(_result("q1"))
+
+    real_open = Path.open
+    state = {"fail": True}
+
+    def vanishing_open(
+        self: Path, mode: str = "r", *args: object, **kwargs: object
+    ) -> object:
+        if state["fail"] and mode == "rb":
+            state["fail"] = False
+            raise FileNotFoundError("simulated vanish before probe")
+        return real_open(self, mode, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", vanishing_open)
+    checkpoint.record(_result("q2"))
+    assert state["fail"] is False
+    monkeypatch.undo()
+    reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert reread.completed_query_ids == frozenset({"q1", "q2"})
+
+
+def test_checkpoint_drops_final_line_with_torn_utf8(tmp_path: Path) -> None:
+    path = tmp_path / "torn-utf8.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    checkpoint.record(_result("q1"))
+    with path.open("ab") as handle:
+        handle.write(b'{"query_id": "q2", "retrieved\xff')  # crash mid-append
+
+    reopened = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert reopened.completed_query_ids == frozenset({"q1"})
+    reopened.record(_result("q2"))
+    reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    assert reread.completed_query_ids == frozenset({"q1", "q2"})
+
+
+def test_checkpoint_rejects_invalid_utf8_before_the_final_line(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bad-utf8.jsonl"
+    checkpoint = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+    checkpoint.record(_result("q1"))
+    with path.open("ab") as handle:
+        handle.write(b"\xff\xfe\n")
+        handle.write(b'{"query_id": "q2", "retrieved_document_ids": ["d1"]}\n')
+    with pytest.raises(EvaluationError, match="not valid UTF-8"):
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+    header_only = tmp_path / "bad-header.jsonl"
+    header_only.write_bytes(b"\xff")
+    with pytest.raises(EvaluationError, match="not valid UTF-8"):
+        EvaluationCheckpoint(header_only, fingerprint=FINGERPRINT)
+
+
+def _checkpoint_with_records(
+    tmp_path: Path, name: str, record_lines: list[str]
+) -> Path:
+    path = tmp_path / name
+    _write_checkpoint_file(path, [_header_line(), *record_lines], trailing_newline=True)
+    return path
+
+
+def test_checkpoint_rejects_non_object_records(tmp_path: Path) -> None:
+    path = _checkpoint_with_records(tmp_path, "array.jsonl", ["[1, 2]"])
+    with pytest.raises(EvaluationError, match="records must be objects"):
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+
+def test_checkpoint_rejects_records_with_wrong_field_types(tmp_path: Path) -> None:
+    bad_id = _checkpoint_with_records(
+        tmp_path,
+        "bad-id.jsonl",
+        [json.dumps({"query_id": 7, "retrieved_document_ids": ["d1"]})],
+    )
+    with pytest.raises(EvaluationError, match="needs a string query_id"):
+        EvaluationCheckpoint(bad_id, fingerprint=FINGERPRINT)
+
+    bad_ids = _checkpoint_with_records(
+        tmp_path,
+        "bad-ids.jsonl",
+        [json.dumps({"query_id": "q1", "retrieved_document_ids": "d1"})],
+    )
+    with pytest.raises(EvaluationError, match="needs a string query_id"):
+        EvaluationCheckpoint(bad_ids, fingerprint=FINGERPRINT)
+
+
+def test_checkpoint_rejects_records_with_invalid_document_ids(
+    tmp_path: Path,
+) -> None:
+    path = _checkpoint_with_records(
+        tmp_path,
+        "invalid-ids.jsonl",
+        [json.dumps({"query_id": "q1", "retrieved_document_ids": [1]})],
+    )
+    with pytest.raises(EvaluationError, match="invalid checkpoint record"):
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+
+def test_checkpoint_rejects_duplicate_queries_in_file(tmp_path: Path) -> None:
+    record = json.dumps({"query_id": "q1", "retrieved_document_ids": ["d1"]})
+    path = _checkpoint_with_records(tmp_path, "dup.jsonl", [record, record])
+    with pytest.raises(EvaluationError, match="duplicate query"):
+        EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
+
+
+def test_run_with_checkpoint_validates_its_arguments(tmp_path: Path) -> None:
+    checkpoint = EvaluationCheckpoint(tmp_path / "c.jsonl", fingerprint=FINGERPRINT)
+    with pytest.raises(
+        EvaluationError, match="checkpoint must be an EvaluationCheckpoint"
+    ):
+        run_with_checkpoint(object(), [], _result)  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="queries must be a sequence"):
+        run_with_checkpoint(checkpoint, "q1", _result)  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="queries must be a sequence"):
+        run_with_checkpoint(checkpoint, (q for q in [_query("q1")]), _result)  # type: ignore[arg-type]
+    with pytest.raises(
+        EvaluationError, match=r"queries\[0\] must be an EvaluationQuery"
+    ):
+        run_with_checkpoint(checkpoint, [object()], _result)  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="run_query must be callable"):
+        run_with_checkpoint(checkpoint, [_query("q1")], None)  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="must return a RetrievedQueryResult"):
+        run_with_checkpoint(checkpoint, [_query("q1")], lambda q: object())  # type: ignore[arg-type]
