@@ -976,8 +976,8 @@ def test_bootstrap_rejects_invalid_arguments() -> None:
         bootstrap_metric_delta(empty)
 
 
-def test_bootstrap_delta_rejects_inconsistent_values() -> None:
-    values: dict[str, object] = {
+def _bootstrap_delta_kwargs() -> dict[str, object]:
+    return {
         "retriever": "bm25",
         "metric": "recall",
         "cutoff": 1,
@@ -992,6 +992,10 @@ def test_bootstrap_delta_rejects_inconsistent_values() -> None:
         "p_value": 0.01,
         "significant": True,
     }
+
+
+def test_bootstrap_delta_rejects_inconsistent_values() -> None:
+    values = _bootstrap_delta_kwargs()
     assert BootstrapDelta(**values)  # type: ignore[arg-type]
     for changes in (
         {"ci_lower": 0.7},
@@ -1006,3 +1010,40 @@ def test_bootstrap_delta_rejects_inconsistent_values() -> None:
         bad.update(changes)
         with pytest.raises(EvaluationError):
             BootstrapDelta(**bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"retriever": " "}, "BootstrapDelta.retriever must be non-empty"),
+        ({"metric": ""}, "BootstrapDelta.metric must be non-empty"),
+        ({"cutoff": 0}, "BootstrapDelta.cutoff must be positive or None"),
+        ({"cutoff": True}, "BootstrapDelta.cutoff must be positive or None"),
+        ({"resamples": 0}, "BootstrapDelta.resamples must be positive"),
+        ({"resamples": True}, "BootstrapDelta.resamples must be positive"),
+        ({"significant": "yes"}, "BootstrapDelta.significant must be boolean"),
+    ],
+)
+def test_bootstrap_delta_rejects_invalid_fields(
+    changes: dict[str, object], message: str
+) -> None:
+    bad = _bootstrap_delta_kwargs()
+    bad.update(changes)
+    with pytest.raises(EvaluationError, match=message):
+        BootstrapDelta(**bad)  # type: ignore[arg-type]
+
+
+def test_bootstrap_exact_percentile_positions_use_order_statistics() -> None:
+    # 41 resamples put the 2.5% and 97.5% positions exactly on sorted
+    # indices 1 and 39, so the endpoints are single resample means (the
+    # second smallest and second largest of the seeded resample means
+    # for these deltas), not interpolations between neighbours.
+    result = bootstrap_metric_delta(
+        _bootstrap_comparison([0.0, 0.3, 0.7, 1.0]), resamples=41
+    )
+
+    assert result.observed_delta == 0.5
+    assert result.ci_lower == pytest.approx(0.175)
+    assert result.ci_upper == pytest.approx(0.85)
+    assert result.p_value == 0.0
+    assert result.significant is True
