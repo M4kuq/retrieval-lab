@@ -1034,16 +1034,19 @@ def test_bootstrap_delta_rejects_invalid_fields(
 
 
 def test_bootstrap_exact_percentile_positions_use_order_statistics() -> None:
-    # 41 resamples put the 2.5% and 97.5% positions exactly on sorted
-    # indices 1 and 39, so the endpoints are single resample means (the
-    # second smallest and second largest of the seeded resample means
-    # for these deltas), not interpolations between neighbours.
+    # 41 resamples at confidence 0.75 put both quantile positions on
+    # exact sorted indices (0.125 * 40 == 5.0 and 0.875 * 40 == 35.0 in
+    # binary floating point), so the endpoints are single resample
+    # means rather than interpolations between neighbours.
     result = bootstrap_metric_delta(
-        _bootstrap_comparison([0.0, 0.3, 0.7, 1.0]), resamples=41
+        _bootstrap_comparison([0.0, 0.3, 0.7, 1.0]),
+        resamples=41,
+        confidence_level=0.75,
     )
 
+    assert result.confidence_level == 0.75
     assert result.observed_delta == 0.5
-    assert result.ci_lower == pytest.approx(0.175)
-    assert result.ci_upper == pytest.approx(0.85)
+    assert result.ci_lower == pytest.approx(0.25)
+    assert result.ci_upper == pytest.approx(0.675)
     assert result.p_value == 0.0
     assert result.significant is True
