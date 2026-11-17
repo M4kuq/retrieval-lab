@@ -649,7 +649,7 @@ class MetricRequirements:
 - `python -c "import retrieval_lab"`
 - `retrieval-lab --help`
 - Linux、Windows、macOSのCI
-- Python 3.11、3.12、3.13
+- Python 3.11、3.12、3.13、3.14
 
 ## 20. 実装順序
 
