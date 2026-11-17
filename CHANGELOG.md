@@ -13,6 +13,10 @@ cut.
 
 ### Added
 
+- Tests pinning `BootstrapDelta` field validation (non-empty names,
+  positive-or-None cutoff, positive resamples, boolean significance)
+  and the bootstrap percentile path when a quantile position lands
+  exactly on a resample mean.
 - Python 3.14 support: the full test suite, lint, and type checks pass
   on CPython 3.14, the CI matrix covers it on all three operating
   systems, and the package classifiers declare it. Packaging tests pin
