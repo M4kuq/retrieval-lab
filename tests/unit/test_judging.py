@@ -300,11 +300,14 @@ def test_callable_judge_rejects_blank_name_and_non_callable() -> None:
         CallableJudge("judge", None)  # type: ignore[arg-type]
 
 
-def test_mock_judge_rejects_wrong_verdict_name_and_request() -> None:
+@pytest.mark.parametrize("bad_name", ["", " "])
+def test_mock_judge_rejects_wrong_verdict_name_and_request(
+    bad_name: str,
+) -> None:
     with pytest.raises(EvaluationError, match="verdict must be a JudgeVerdict"):
         MockJudge(object())  # type: ignore[arg-type]
     with pytest.raises(EvaluationError, match="name must be a non-empty string"):
-        MockJudge(JudgeVerdict(0.5), name="")
+        MockJudge(JudgeVerdict(0.5), name=bad_name)
     with pytest.raises(EvaluationError, match="request must be a JudgeRequest"):
         MockJudge(JudgeVerdict(0.5)).judge(object(), "prompt")  # type: ignore[arg-type]
 
