@@ -246,3 +246,117 @@ def test_panel_judgment_rejects_inconsistent_records() -> None:
         JudgeOutput(judge="", verdict=JudgeVerdict(0.5), latency_ms=0.0, prompt="p")
     with pytest.raises(EvaluationError):
         JudgeOutput(judge="j", verdict=JudgeVerdict(0.5), latency_ms=-1.0, prompt="p")
+
+
+def test_usage_rejects_non_numeric_cost() -> None:
+    for bad_cost in (True, "0.5"):
+        with pytest.raises(EvaluationError, match="cost_usd"):
+            JudgeUsage(cost_usd=bad_cost)  # type: ignore[arg-type]
+
+
+def test_request_rejects_non_string_answer_and_reference() -> None:
+    with pytest.raises(EvaluationError, match="answer must be a string"):
+        JudgeRequest(query_id="q", query="q", answer=object())  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="reference must be a string or None"):
+        JudgeRequest(query_id="q", query="q", answer="a", reference=42)  # type: ignore[arg-type]
+
+
+def test_template_render_rejects_non_request() -> None:
+    with pytest.raises(EvaluationError, match="request must be a JudgeRequest"):
+        DEFAULT_JUDGE_PROMPT_TEMPLATE.render(object())  # type: ignore[arg-type]
+
+
+def test_verdict_rejects_non_string_rationale() -> None:
+    with pytest.raises(EvaluationError, match="rationale must be a string or None"):
+        JudgeVerdict(0.5, rationale=42)  # type: ignore[arg-type]
+
+
+def test_output_rejects_wrong_field_types() -> None:
+    verdict = JudgeVerdict(0.5)
+    with pytest.raises(EvaluationError, match="verdict must be a JudgeVerdict"):
+        JudgeOutput(judge="j", verdict=object(), latency_ms=0.0, prompt="p")  # type: ignore[arg-type]
+    for bad_latency in (True, "10"):
+        with pytest.raises(EvaluationError, match="latency_ms"):
+            JudgeOutput(judge="j", verdict=verdict, latency_ms=bad_latency, prompt="p")  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="prompt must be a string"):
+        JudgeOutput(judge="j", verdict=verdict, latency_ms=0.0, prompt=None)  # type: ignore[arg-type]
+
+
+def test_callable_judge_rejects_blank_name_and_non_callable() -> None:
+    def callback(request: JudgeRequest, prompt: str) -> JudgeVerdict:
+        return JudgeVerdict(0.5)
+
+    with pytest.raises(EvaluationError, match="name must be a non-empty string"):
+        CallableJudge(" ", callback)
+    with pytest.raises(EvaluationError, match="callback must be callable"):
+        CallableJudge("judge", None)  # type: ignore[arg-type]
+
+
+def test_mock_judge_rejects_wrong_verdict_name_and_request() -> None:
+    with pytest.raises(EvaluationError, match="verdict must be a JudgeVerdict"):
+        MockJudge(object())  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="name must be a non-empty string"):
+        MockJudge(JudgeVerdict(0.5), name="")
+    with pytest.raises(EvaluationError, match="request must be a JudgeRequest"):
+        MockJudge(JudgeVerdict(0.5)).judge(object(), "prompt")  # type: ignore[arg-type]
+
+
+def test_panel_judgment_rejects_blank_query_and_foreign_outputs() -> None:
+    output = JudgeOutput(
+        judge="judge-a",
+        verdict=JudgeVerdict(0.5),
+        latency_ms=10.0,
+        prompt="prompt",
+    )
+    with pytest.raises(EvaluationError, match="query_id must be non-empty"):
+        PanelJudgment(query_id=" ", outputs=(output,))
+    with pytest.raises(EvaluationError, match="must contain JudgeOutput"):
+        PanelJudgment(query_id="q", outputs=(object(),))  # type: ignore[arg-type]
+
+
+def test_judge_answer_validates_request_template_and_clock() -> None:
+    judge = MockJudge(JudgeVerdict(0.5))
+    with pytest.raises(EvaluationError, match="request must be a JudgeRequest"):
+        judge_answer(judge, object())  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="template must be a JudgePromptTemplate"):
+        judge_answer(judge, _request(), template=object())  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="clock must be callable"):
+        judge_answer(judge, _request(), clock=None)  # type: ignore[arg-type]
+
+
+class _NamelessJudge:
+    def judge(self, request: JudgeRequest, prompt: str) -> JudgeVerdict:
+        return JudgeVerdict(0.5)
+
+
+class _BlankNameJudge:
+    name = ""
+
+    def judge(self, request: JudgeRequest, prompt: str) -> JudgeVerdict:
+        return JudgeVerdict(0.5)
+
+
+class _NonCallableJudge:
+    name = "judge"
+    judge = None
+
+
+def test_judge_answer_rejects_judges_without_a_usable_contract() -> None:
+    for bad_judge in (
+        object(),
+        _NamelessJudge(),
+        _BlankNameJudge(),
+        _NonCallableJudge(),
+    ):
+        with pytest.raises(
+            EvaluationError, match="must provide non-empty name and callable judge"
+        ):
+            judge_answer(bad_judge, _request(), clock=SequenceClock(0.0, 0.1))  # type: ignore[arg-type]
+
+
+def test_judge_answer_rejects_unreadable_clocks() -> None:
+    judge = MockJudge(JudgeVerdict(0.5))
+    with pytest.raises(EvaluationError, match="clock must return a finite number"):
+        judge_answer(judge, _request(), clock=lambda: "soon")  # type: ignore[arg-type, return-value]
+    with pytest.raises(EvaluationError, match="clock must return a finite number"):
+        judge_answer(judge, _request(), clock=lambda: float("inf"))
