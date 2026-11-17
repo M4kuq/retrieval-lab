@@ -230,18 +230,28 @@ def test_release_workflow_is_tag_driven_and_uses_trusted_publishing() -> None:
         assert forbidden not in serialized
 
 
-def test_ci_matrix_matches_declared_python_classifiers() -> None:
+def _declared_python_versions() -> set[str]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    declared = {
+    return {
         classifier.rsplit(" ", 1)[-1]
         for classifier in pyproject["project"]["classifiers"]
         if classifier.startswith("Programming Language :: Python :: 3.")
     }
+
+
+def test_ci_matrix_matches_declared_python_classifiers() -> None:
     workflow = yaml.safe_load(
         (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
     matrix = workflow["jobs"]["tests"]["strategy"]["matrix"]["python-version"]
-    assert {str(version) for version in matrix} == declared
+    assert {str(version) for version in matrix} == _declared_python_versions()
+
+
+def test_technical_design_lists_the_declared_python_versions() -> None:
+    design = (ROOT / "docs" / "technical-design.md").read_text(encoding="utf-8")
+    bullets = re.findall(r"^- Python (3\.\d+(?:、3\.\d+)*)$", design, re.MULTILINE)
+    assert len(bullets) == 1
+    assert set(bullets[0].split("、")) == _declared_python_versions()
 
 
 def test_clean_build_artifacts_have_expected_content_and_metadata(
