@@ -13,6 +13,11 @@ cut.
 
 ### Added
 
+- Python 3.14 support: the full test suite, lint, and type checks pass
+  on CPython 3.14, the CI matrix covers it on all three operating
+  systems, and the package classifiers declare it. A packaging test
+  pins the CI matrix and the declared classifiers to the same version
+  set so the two cannot drift apart.
 - Chunk-level precomputed evaluation: `evaluate_results()` now accepts a
   chunk-level `EvaluationDataset` and matches retrieved chunk IDs directly
   against its chunk-level grades, so rankings produced by an external
