@@ -248,10 +248,10 @@ def test_panel_judgment_rejects_inconsistent_records() -> None:
         JudgeOutput(judge="j", verdict=JudgeVerdict(0.5), latency_ms=-1.0, prompt="p")
 
 
-def test_usage_rejects_non_numeric_cost() -> None:
-    for bad_cost in (True, "0.5"):
-        with pytest.raises(EvaluationError, match="cost_usd"):
-            JudgeUsage(cost_usd=bad_cost)  # type: ignore[arg-type]
+@pytest.mark.parametrize("bad_cost", [True, "0.5"])
+def test_usage_rejects_non_numeric_cost(bad_cost: object) -> None:
+    with pytest.raises(EvaluationError, match="cost_usd must be finite and >= 0"):
+        JudgeUsage(cost_usd=bad_cost)  # type: ignore[arg-type]
 
 
 def test_request_rejects_non_string_answer_and_reference() -> None:
@@ -275,11 +275,19 @@ def test_output_rejects_wrong_field_types() -> None:
     verdict = JudgeVerdict(0.5)
     with pytest.raises(EvaluationError, match="verdict must be a JudgeVerdict"):
         JudgeOutput(judge="j", verdict=object(), latency_ms=0.0, prompt="p")  # type: ignore[arg-type]
-    for bad_latency in (True, "10"):
-        with pytest.raises(EvaluationError, match="latency_ms"):
-            JudgeOutput(judge="j", verdict=verdict, latency_ms=bad_latency, prompt="p")  # type: ignore[arg-type]
     with pytest.raises(EvaluationError, match="prompt must be a string"):
         JudgeOutput(judge="j", verdict=verdict, latency_ms=0.0, prompt=None)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad_latency", [True, "10"])
+def test_output_rejects_non_numeric_latency(bad_latency: object) -> None:
+    with pytest.raises(EvaluationError, match="latency_ms must be finite and >= 0"):
+        JudgeOutput(
+            judge="j",
+            verdict=JudgeVerdict(0.5),
+            latency_ms=bad_latency,  # type: ignore[arg-type]
+            prompt="p",
+        )
 
 
 def test_callable_judge_rejects_blank_name_and_non_callable() -> None:
@@ -336,27 +344,47 @@ class _BlankNameJudge:
         return JudgeVerdict(0.5)
 
 
+class _WhitespaceNameJudge:
+    name = " "
+
+    def judge(self, request: JudgeRequest, prompt: str) -> JudgeVerdict:
+        return JudgeVerdict(0.5)
+
+
 class _NonCallableJudge:
     name = "judge"
     judge = None
 
 
-def test_judge_answer_rejects_judges_without_a_usable_contract() -> None:
-    for bad_judge in (
-        object(),
-        _NamelessJudge(),
-        _BlankNameJudge(),
-        _NonCallableJudge(),
+@pytest.mark.parametrize(
+    "bad_judge",
+    [
+        pytest.param(object(), id="no-attributes"),
+        pytest.param(_NamelessJudge(), id="missing-name"),
+        pytest.param(_BlankNameJudge(), id="blank-name"),
+        pytest.param(_WhitespaceNameJudge(), id="whitespace-name"),
+        pytest.param(_NonCallableJudge(), id="non-callable-judge"),
+    ],
+)
+def test_judge_answer_rejects_judges_without_a_usable_contract(
+    bad_judge: object,
+) -> None:
+    with pytest.raises(
+        EvaluationError, match="must provide non-empty name and callable judge"
     ):
-        with pytest.raises(
-            EvaluationError, match="must provide non-empty name and callable judge"
-        ):
-            judge_answer(bad_judge, _request(), clock=SequenceClock(0.0, 0.1))  # type: ignore[arg-type]
+        judge_answer(bad_judge, _request(), clock=SequenceClock(0.0, 0.1))  # type: ignore[arg-type]
 
 
-def test_judge_answer_rejects_unreadable_clocks() -> None:
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        pytest.param("soon", id="text"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="inf"),
+        pytest.param(float("-inf"), id="-inf"),
+    ],
+)
+def test_judge_answer_rejects_unreadable_clocks(bad_value: object) -> None:
     judge = MockJudge(JudgeVerdict(0.5))
     with pytest.raises(EvaluationError, match="clock must return a finite number"):
-        judge_answer(judge, _request(), clock=lambda: "soon")  # type: ignore[arg-type, return-value]
-    with pytest.raises(EvaluationError, match="clock must return a finite number"):
-        judge_answer(judge, _request(), clock=lambda: float("inf"))
+        judge_answer(judge, _request(), clock=lambda: bad_value)  # type: ignore[arg-type]
