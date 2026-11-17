@@ -361,27 +361,42 @@ def test_sync_directory_skips_non_posix_platforms(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     checkpoint = EvaluationCheckpoint(tmp_path / "c.jsonl", fingerprint=FINGERPRINT)
+    opened: list[object] = []
+    real_open = os.open
+
+    def recording_open(*args: object, **kwargs: object) -> int:
+        opened.append(args)
+        return real_open(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", recording_open)
     monkeypatch.setattr(os, "name", "nt")
     checkpoint._sync_ancestors()
+    assert opened == []
 
 
+@pytest.mark.skipif(os.name != "posix", reason="directory sync is POSIX-only")
 def test_sync_directory_tolerates_open_and_fsync_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     checkpoint = EvaluationCheckpoint(tmp_path / "c.jsonl", fingerprint=FINGERPRINT)
+    calls = {"open": 0, "fsync": 0}
 
     def broken_open(*args: object, **kwargs: object) -> int:
+        calls["open"] += 1
         raise OSError("simulated open failure")
 
     monkeypatch.setattr(os, "open", broken_open)
     checkpoint._sync_ancestors()
+    assert calls["open"] > 0
     monkeypatch.undo()
 
     def broken_fsync(descriptor: int) -> None:
+        calls["fsync"] += 1
         raise OSError("simulated fsync failure")
 
     monkeypatch.setattr(os, "fsync", broken_fsync)
     checkpoint._sync_ancestors()
+    assert calls["fsync"] > 0
 
 
 def test_checkpoint_rejects_uninspectable_existing_file(
@@ -437,6 +452,7 @@ def test_record_tolerates_checkpoint_vanishing_before_separator_probe(
 
     monkeypatch.setattr(Path, "open", vanishing_open)
     checkpoint.record(_result("q2"))
+    assert state["fail"] is False
     monkeypatch.undo()
     reread = EvaluationCheckpoint(path, fingerprint=FINGERPRINT)
     assert reread.completed_query_ids == frozenset({"q1", "q2"})
