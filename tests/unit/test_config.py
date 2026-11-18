@@ -199,6 +199,24 @@ def test_config_reports_independent_retriever_errors(tmp_path: Path) -> None:
     assert "retrievers[2].sources" in message
 
 
+def test_config_rejects_an_unknown_builtin_retriever_type(tmp_path: Path) -> None:
+    path = _write_fixture(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace(
+            "  - name: keyword\n    type: keyword",
+            "  - name: vector-magic\n    type: vector-magic",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError) as captured:
+        load_config(path)
+    message = str(captured.value)
+    assert "unsupported built-in type 'vector-magic'" in message
+    assert "Hint: use keyword, bm25, dense, or hybrid" in message
+
+
 def test_config_supports_windows_relative_path_spelling(tmp_path: Path) -> None:
     path = _write_fixture(tmp_path)
     text = path.read_text(encoding="utf-8").replace("path: docs", "path: docs\\docs")

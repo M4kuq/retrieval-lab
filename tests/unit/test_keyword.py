@@ -26,6 +26,21 @@ def _chunk(
     )
 
 
+def test_index_size_bytes_follows_the_index_lifecycle() -> None:
+    retriever = KeywordRetriever()
+    assert retriever.index_size_bytes is None
+
+    retriever.index([])
+    assert retriever.index_size_bytes == 0
+
+    retriever.index([_chunk("chunk-a", "hello world")])
+    size = retriever.index_size_bytes
+    assert size is not None and size > 0
+
+    retriever.index([_chunk("chunk-a", "hello world")])
+    assert retriever.index_size_bytes == size
+
+
 def test_japanese_terms_rank_by_distinct_substring_matches() -> None:
     retriever = KeywordRetriever()
     assert retriever.name == "keyword"
