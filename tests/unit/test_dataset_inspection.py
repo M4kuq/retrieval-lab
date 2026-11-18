@@ -145,6 +145,127 @@ def test_inspect_dataset_rejects_invalid_concentration_threshold(
         )
 
 
+def test_inspect_dataset_rejects_non_dataset() -> None:
+    with pytest.raises(DatasetValidationError, match="must be an EvaluationDataset"):
+        inspect_dataset(object())  # type: ignore[arg-type]
+
+
+def test_inspect_dataset_skips_concentration_below_min_queries() -> None:
+    dataset = _dataset(
+        *[
+            EvaluationQuery(
+                f"q-{index}",
+                f"query {index}",
+                relevant_document_ids={"shared"},
+            )
+            for index in range(3)
+        ]
+    )
+
+    report = inspect_dataset(dataset)
+
+    assert report.max_relevance_share == pytest.approx(1.0)
+    assert all(issue.code != "relevance_concentration" for issue in report.issues)
+
+
+def test_inspect_dataset_reports_no_concentration_when_shares_are_low() -> None:
+    dataset = _dataset(
+        *[
+            EvaluationQuery(
+                f"q-{index}",
+                f"query {index}",
+                relevant_document_ids={f"doc-{index}"},
+            )
+            for index in range(5)
+        ]
+    )
+
+    report = inspect_dataset(dataset)
+
+    assert report.max_relevance_share == pytest.approx(0.2)
+    assert all(issue.code != "relevance_concentration" for issue in report.issues)
+
+
+def test_inspect_dataset_verbatim_check_continues_past_non_matching_query() -> None:
+    dataset = _dataset(
+        EvaluationQuery(
+            "q-1",
+            "a long query that appears nowhere",
+            relevant_document_ids={"doc-1"},
+        ),
+        EvaluationQuery(
+            "q-2",
+            "a long query that does appear here",
+            relevant_document_ids={"doc-2"},
+        ),
+    )
+    documents = [
+        Document("doc-1", "completely unrelated content"),
+        Document("doc-2", "prefix a long query that does appear here suffix"),
+    ]
+
+    report = inspect_dataset(dataset, documents=documents)
+
+    verbatim = [
+        issue
+        for issue in report.issues
+        if issue.code == "verbatim_query_in_relevant_text"
+    ]
+    assert len(verbatim) == 1
+    assert verbatim[0].query_ids == ("q-2",)
+
+
+def test_inspect_dataset_skips_verbatim_check_for_chunk_dataset_without_chunks() -> (
+    None
+):
+    dataset = EvaluationDataset(
+        [
+            EvaluationQuery(
+                "q-1",
+                "sufficiently long chunk query",
+                relevant_chunk_ids={"chunk-1"},
+            )
+        ],
+        relevance_level="chunk",
+    )
+
+    report = inspect_dataset(dataset)
+
+    assert all(
+        issue.code != "verbatim_query_in_relevant_text" for issue in report.issues
+    )
+
+
+def test_inspect_dataset_skips_verbatim_check_for_short_queries() -> None:
+    dataset = _dataset(EvaluationQuery("q-1", "short", relevant_document_ids={"doc-1"}))
+    documents = [Document("doc-1", "a short text")]
+
+    report = inspect_dataset(dataset, documents=documents)
+
+    assert all(
+        issue.code != "verbatim_query_in_relevant_text" for issue in report.issues
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min_queries_for_concentration": 1},
+        {"min_queries_for_concentration": True},
+        {"min_queries_for_concentration": 2.5},
+        {"min_verbatim_query_characters": 0},
+        {"min_verbatim_query_characters": False},
+    ],
+)
+def test_inspect_dataset_rejects_invalid_integer_limits(
+    kwargs: dict[str, object],
+) -> None:
+    dataset = _dataset(EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"}))
+
+    with pytest.raises(DatasetValidationError, match="inspection limit"):
+        inspect_dataset(dataset, **kwargs)  # type: ignore[arg-type]
+
+
 def test_inspect_dataset_validates_supplied_corpus_ids() -> None:
     dataset = _dataset(
         EvaluationQuery(

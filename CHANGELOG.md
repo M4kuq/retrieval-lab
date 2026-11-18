@@ -13,6 +13,12 @@ cut.
 
 ### Added
 
+- Tests pinning `inspect_dataset` argument validation and skip paths:
+  non-dataset input and invalid integer limits are rejected, the
+  relevance-concentration check is skipped below the minimum query
+  count while the maximum share is still reported, and the verbatim
+  check is skipped for chunk-level datasets supplied without chunks
+  and for queries shorter than the configured minimum length.
 - Tests pinning `BootstrapDelta` field validation (non-empty names,
   positive-or-None cutoff, positive resamples, boolean significance)
   and the bootstrap percentile path when a quantile position lands
