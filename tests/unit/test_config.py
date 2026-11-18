@@ -212,7 +212,9 @@ def test_config_rejects_an_unknown_builtin_retriever_type(tmp_path: Path) -> Non
 
     with pytest.raises(ConfigurationError) as captured:
         load_config(path)
-    assert "unsupported built-in type 'vector-magic'" in str(captured.value)
+    message = str(captured.value)
+    assert "unsupported built-in type 'vector-magic'" in message
+    assert "supported built-in types are" in message
 
 
 def test_config_supports_windows_relative_path_spelling(tmp_path: Path) -> None:
