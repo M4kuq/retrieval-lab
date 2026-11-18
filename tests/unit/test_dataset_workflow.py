@@ -25,6 +25,15 @@ def _corpus(tmp_path: Path) -> Path:
     return root
 
 
+def test_load_dataset_draft_rejects_an_oversized_manifest(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "dataset-manifest.json").write_bytes(b"x" * (1024 * 1024 + 1))
+
+    with pytest.raises(DatasetValidationError, match=r"exceeds the .* safety limit"):
+        load_dataset_draft(bundle)
+
+
 def test_load_dataset_draft_round_trips_incomplete_bundle(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     original = DatasetDraft(

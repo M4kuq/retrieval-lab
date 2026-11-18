@@ -13,6 +13,14 @@ cut.
 
 ### Added
 
+- Tests pinning validation paths across shipped modules:
+  `KeywordRetriever.index_size_bytes` follows the index lifecycle
+  (None before indexing, 0 for an empty index, a deterministic
+  positive size afterwards); `load_config` reports an unknown
+  built-in retriever type together with its hint;
+  `context_precision` / `context_recall` reject a non-collection
+  `relevant_ids`; and `load_dataset_draft` rejects a dataset
+  manifest larger than the 1 MiB safety limit before parsing it.
 - Tests pinning `evaluate_quality_gates` reference and regression
   paths: gates referencing a missing cutoff, a missing metric at an
   existing cutoff, a candidate-only retriever (drop gates), or a

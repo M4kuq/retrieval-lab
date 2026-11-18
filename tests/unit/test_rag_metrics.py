@@ -75,6 +75,13 @@ def test_context_metrics_validate_inputs() -> None:
         context_recall([1], {"a"})  # type: ignore[list-item]
 
 
+def test_context_metrics_reject_non_collection_relevant_ids() -> None:
+    with pytest.raises(EvaluationError, match="must be a collection"):
+        context_precision(["a"], 42)  # type: ignore[arg-type]
+    with pytest.raises(EvaluationError, match="must be a collection"):
+        context_recall(["a"], "a")  # type: ignore[arg-type]
+
+
 def test_evaluate_rag_answer_combines_all_metrics() -> None:
     evaluation = evaluate_rag_answer(
         "q-1",
