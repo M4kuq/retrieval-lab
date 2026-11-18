@@ -255,6 +255,8 @@ def test_inspect_dataset_skips_verbatim_check_for_short_queries() -> None:
         {"min_queries_for_concentration": 2.5},
         {"min_verbatim_query_characters": 0},
         {"min_verbatim_query_characters": False},
+        {"min_verbatim_query_characters": True},
+        {"min_verbatim_query_characters": 2.5},
     ],
 )
 def test_inspect_dataset_rejects_invalid_integer_limits(
