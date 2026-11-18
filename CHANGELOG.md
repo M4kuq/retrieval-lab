@@ -13,6 +13,13 @@ cut.
 
 ### Added
 
+- Tests pinning `evaluate_quality_gates` reference and regression
+  paths: gates referencing a missing cutoff, a missing metric at an
+  existing cutoff, a candidate-only retriever (drop gates), or a
+  latency metric the baseline lacks all raise `ConfigurationError`;
+  a latency absolute regression beyond its threshold fails with the
+  hand-calculated regression amount; and a drop that stays within
+  the comparison tolerance counts as zero regression.
 - Tests pinning `inspect_dataset` argument validation and skip paths:
   non-dataset input and invalid integer limits are rejected, the
   relevance-concentration check is skipped below the minimum query

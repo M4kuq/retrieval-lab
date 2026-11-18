@@ -257,6 +257,122 @@ def test_invalid_reference_and_missing_baseline_are_configuration_errors() -> No
         )
 
 
+def test_gate_referencing_a_missing_cutoff_is_a_configuration_error() -> None:
+    candidate = _result(0.5)
+    with pytest.raises(ConfigurationError, match="unavailable metric"):
+        evaluate_quality_gates(
+            candidate,
+            (QualityGateConfig(retriever="bm25", metric="recall@5", min_value=0.1),),
+        )
+
+
+def test_gate_referencing_a_missing_metric_at_a_cutoff_is_a_configuration_error() -> (
+    None
+):
+    candidate = _result(0.5)
+    with pytest.raises(ConfigurationError, match="unavailable metric"):
+        evaluate_quality_gates(
+            candidate,
+            (QualityGateConfig(retriever="bm25", metric="ndcg@1", min_value=0.1),),
+        )
+
+
+def test_drop_gate_on_a_candidate_only_retriever_is_a_configuration_error() -> None:
+    baseline = _result(0.5, run_id="baseline")
+    candidate_base = _result(0.5, run_id="candidate")
+    dense_queries = tuple(
+        QueryEvaluation(
+            query_id=query.query_id,
+            retrieved_ids=query.retrieved_ids,
+            metrics_by_cutoff={1: {"recall": 0.8}},
+        )
+        for query in candidate_base.query_results["bm25"]
+    )
+    candidate = EvaluationResult(
+        run_id=candidate_base.run_id,
+        metrics={
+            **candidate_base.metrics,
+            "dense": RetrieverMetrics({1: {"recall": 0.8}}),
+        },
+        query_results={
+            **candidate_base.query_results,
+            "dense": dense_queries,
+        },
+        manifest=candidate_base.manifest,
+    )
+
+    with pytest.raises(ConfigurationError, match="unavailable retriever"):
+        evaluate_quality_gates(
+            candidate,
+            (
+                QualityGateConfig(
+                    retriever="dense", metric="recall@1", max_absolute_drop=0.1
+                ),
+            ),
+            baseline=baseline,
+        )
+
+
+def test_latency_drop_gate_without_baseline_latency_is_a_configuration_error() -> None:
+    baseline = _result(0.5, run_id="baseline")
+    candidate = _result(0.5, run_id="candidate", latency=150.0)
+    with pytest.raises(ConfigurationError, match="unavailable metric"):
+        evaluate_quality_gates(
+            candidate,
+            (
+                QualityGateConfig(
+                    retriever="bm25",
+                    metric="latency_mean_ms",
+                    max_absolute_drop=30.0,
+                ),
+            ),
+            baseline=baseline,
+        )
+
+
+def test_latency_absolute_regression_beyond_threshold_fails() -> None:
+    baseline = _result(0.5, run_id="baseline", latency=100.0)
+    candidate = _result(0.5, run_id="candidate", latency=150.0)
+
+    report = evaluate_quality_gates(
+        candidate,
+        (
+            QualityGateConfig(
+                retriever="bm25",
+                metric="latency_mean_ms",
+                max_absolute_drop=30.0,
+            ),
+        ),
+        baseline=baseline,
+    )
+
+    check = report.results[0].checks[0]
+    assert not report.passed
+    assert check.actual == pytest.approx(50.0)
+    assert check.reason == "regression exceeds threshold"
+
+
+def test_drop_within_tolerance_counts_as_zero_regression() -> None:
+    baseline = _result(0.8, run_id="baseline")
+    candidate = _result(0.79, run_id="candidate")
+    gates = (
+        QualityGateConfig(retriever="bm25", metric="recall@1", max_absolute_drop=0.0),
+    )
+
+    strict = evaluate_quality_gates(candidate, gates, baseline=baseline)
+    assert not strict.passed
+    assert strict.results[0].checks[0].actual == pytest.approx(0.01)
+
+    lenient = evaluate_quality_gates(
+        candidate,
+        gates,
+        baseline=baseline,
+        tolerance=ComparisonTolerance(absolute=0.02),
+    )
+    assert lenient.passed
+    assert lenient.results[0].checks[0].actual == 0.0
+
+
 def test_absolute_only_gate_does_not_require_a_baseline_delta() -> None:
     baseline = _result(0.5, run_id="baseline")
     candidate_base = _result(0.5, run_id="candidate")
