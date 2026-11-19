@@ -53,6 +53,33 @@ def _append_word_token(characters: list[str], tokens: list[str]) -> None:
         characters.clear()
 
 
+_KIND_SEPARATOR = 0
+_KIND_WORD = 1
+_KIND_MARK = 2
+_KIND_CJK = 3
+
+_character_kinds: dict[str, int] = {}
+
+
+def _classify_character(character: str) -> int:
+    if _is_cjk_character(character):
+        return _KIND_CJK
+    category = unicodedata.category(character)
+    if category[0] in {"L", "N"}:
+        return _KIND_WORD
+    if category[0] == "M":
+        return _KIND_MARK
+    return _KIND_SEPARATOR
+
+
+def _character_kind(character: str) -> int:
+    kind = _character_kinds.get(character)
+    if kind is None:
+        kind = _classify_character(character)
+        _character_kinds[character] = kind
+    return kind
+
+
 def _default_tokenizer(value: str) -> tuple[str, ...]:
     """Tokenize normalized Unicode words and CJK character n-grams."""
     normalized = unicodedata.normalize("NFC", value).casefold()
@@ -61,13 +88,13 @@ def _default_tokenizer(value: str) -> tuple[str, ...]:
     cjk: list[str] = []
 
     for character in normalized:
-        if _is_cjk_character(character):
+        kind = _character_kind(character)
+        if kind == _KIND_CJK:
             _append_word_token(word, tokens)
             cjk.append(character)
             continue
 
-        category = unicodedata.category(character)
-        if category[0] in {"L", "N"} or (category[0] == "M" and word):
+        if kind == _KIND_WORD or (kind == _KIND_MARK and word):
             _append_cjk_tokens(cjk, tokens)
             word.append(character)
             continue
