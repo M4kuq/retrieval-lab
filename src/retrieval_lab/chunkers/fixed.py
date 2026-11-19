@@ -1,10 +1,10 @@
 """Fixed-size character chunking."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from retrieval_lab.chunkers.ids import stable_chunk_id
 from retrieval_lab.exceptions import CorpusValidationError
-from retrieval_lab.models import Chunk, Document
+from retrieval_lab.models import Chunk, Document, JSONValue
 
 
 class FixedSizeChunker:
@@ -45,12 +45,19 @@ class FixedSizeChunker:
         return chunks
 
     def chunk_document(self, document: Document) -> list[Chunk]:
-        """Split one document without dropping any characters from its text."""
+        """Split one document without dropping any characters from its text.
+
+        A window that would contain only whitespace is extended until it
+        reaches visible content, so such a chunk can exceed ``size`` by the
+        length of an adjacent whitespace run. Trailing whitespace is folded
+        into the final chunk instead of forming a chunk of its own.
+        """
         if not isinstance(document, Document):
             raise CorpusValidationError("document must be a Document record")
         chunks: list[Chunk] = []
         start = 0
         text_length = len(document.text)
+        step = self.size - self.overlap
 
         metadata = dict(document.metadata)
         if document.source is not None:
@@ -58,6 +65,18 @@ class FixedSizeChunker:
 
         while start < text_length:
             end = min(start + self.size, text_length)
+            if not document.text[start:end].strip():
+                visible = _first_visible_offset(document.text, end)
+                if visible is None:
+                    chunks[-1] = _extended_tail_chunk(
+                        chunks[-1],
+                        document=document,
+                        text_length=text_length,
+                        metadata=metadata,
+                    )
+                    break
+                while end <= visible:
+                    end = min(end + step, text_length)
             chunk_text = document.text[start:end]
             chunks.append(
                 Chunk(
@@ -74,3 +93,28 @@ class FixedSizeChunker:
             start = end - self.overlap
 
         return chunks
+
+
+def _first_visible_offset(text: str, start: int) -> int | None:
+    for offset in range(start, len(text)):
+        if not text[offset].isspace():
+            return offset
+    return None
+
+
+def _extended_tail_chunk(
+    chunk: Chunk,
+    *,
+    document: Document,
+    text_length: int,
+    metadata: Mapping[str, JSONValue],
+) -> Chunk:
+    text = document.text[chunk.start_offset : text_length]
+    return Chunk(
+        id=stable_chunk_id(document.id, chunk.start_offset, text_length, text),
+        document_id=document.id,
+        text=text,
+        start_offset=chunk.start_offset,
+        end_offset=text_length,
+        metadata=dict(metadata),
+    )
