@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 
 import pytest
 
@@ -182,3 +183,95 @@ def test_ndcg_rejects_invalid_identifier_cutoff_and_excessive_gain() -> None:
         ndcg_at_k(("a",), {"a": 1}, 0)
     with pytest.raises(ValueError, match="too large"):
         ndcg_at_k(("a",), {"a": 1024}, 1)
+
+
+def _generated_cases() -> list[
+    tuple[tuple[str, ...], frozenset[str], dict[str, int], int]
+]:
+    rng = random.Random(20261120)
+    cases = []
+    for _ in range(200):
+        pool = [f"d{index}" for index in range(rng.randint(2, 10))]
+        retrieved = tuple(rng.sample(pool, k=rng.randint(0, len(pool))))
+        relevant = frozenset(rng.sample(pool, k=rng.randint(1, len(pool))))
+        grades = {identifier: rng.randint(0, 3) for identifier in pool}
+        if not any(grades.values()):
+            grades[pool[0]] = 1
+        cases.append((retrieved, relevant, grades, rng.randint(1, 12)))
+    return cases
+
+
+def test_generated_metrics_stay_within_unit_interval() -> None:
+    for retrieved, relevant, grades, k in _generated_cases():
+        values = (
+            hit_rate_at_k(retrieved, relevant, k),
+            recall_at_k(retrieved, relevant, k),
+            precision_at_k(retrieved, relevant, k),
+            reciprocal_rank(retrieved, relevant, k),
+            average_precision_at_k(retrieved, relevant, k),
+            ndcg_at_k(retrieved, grades, k),
+        )
+        assert all(0.0 <= value <= 1.0 for value in values)
+
+
+def test_binary_metrics_are_invariant_to_permutation_within_cutoff() -> None:
+    rng = random.Random(20261120)
+    for retrieved, relevant, _, k in _generated_cases():
+        head = list(retrieved[:k])
+        rng.shuffle(head)
+        permuted = tuple(head) + retrieved[k:]
+        assert hit_rate_at_k(permuted, relevant, k) == hit_rate_at_k(
+            retrieved, relevant, k
+        )
+        assert recall_at_k(permuted, relevant, k) == recall_at_k(retrieved, relevant, k)
+        assert precision_at_k(permuted, relevant, k) == precision_at_k(
+            retrieved, relevant, k
+        )
+
+
+def test_hit_rate_agrees_with_recall_and_reciprocal_rank() -> None:
+    for retrieved, relevant, _, k in _generated_cases():
+        hit = hit_rate_at_k(retrieved, relevant, k) == 1.0
+        assert hit == (recall_at_k(retrieved, relevant, k) > 0.0)
+        assert hit == (reciprocal_rank(retrieved, relevant, k) > 0.0)
+
+
+def test_prepending_a_relevant_identifier_never_decreases_recall() -> None:
+    for retrieved, relevant, _, k in _generated_cases():
+        missing = [identifier for identifier in relevant if identifier not in retrieved]
+        if not missing:
+            continue
+        prepended = (missing[0], *retrieved)
+        assert recall_at_k(prepended, relevant, k) >= recall_at_k(
+            retrieved, relevant, k
+        )
+
+
+def test_prepending_a_top_graded_identifier_never_decreases_ndcg() -> None:
+    for retrieved, _, grades, k in _generated_cases():
+        top_grade = max(grades.values())
+        candidates = [
+            identifier
+            for identifier, grade in grades.items()
+            if grade == top_grade and identifier not in retrieved
+        ]
+        if not candidates:
+            continue
+        prepended = (candidates[0], *retrieved)
+        assert (
+            ndcg_at_k(prepended, grades, k) >= ndcg_at_k(retrieved, grades, k) - 1e-12
+        )
+
+
+def test_moving_a_relevant_identifier_earlier_never_decreases_average_precision() -> (
+    None
+):
+    for retrieved, relevant, _, k in _generated_cases():
+        for index in range(min(k, len(retrieved)) - 1):
+            if retrieved[index] in relevant or retrieved[index + 1] not in relevant:
+                continue
+            swapped = list(retrieved)
+            swapped[index], swapped[index + 1] = swapped[index + 1], swapped[index]
+            assert average_precision_at_k(
+                tuple(swapped), relevant, k
+            ) >= average_precision_at_k(retrieved, relevant, k)
