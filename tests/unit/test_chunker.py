@@ -94,6 +94,69 @@ def test_chunk_ids_are_deterministic_and_input_sensitive() -> None:
     assert all(len(chunk.id) == 24 for chunk in first)
 
 
+def test_whitespace_only_window_is_extended_to_visible_content() -> None:
+    chunks = FixedSizeChunker(size=1, overlap=0).chunk(
+        [Document(id="doc-1", text="a b")]
+    )
+
+    assert [(chunk.text, chunk.start_offset, chunk.end_offset) for chunk in chunks] == [
+        ("a", 0, 1),
+        (" b", 1, 3),
+    ]
+
+
+def test_whitespace_run_longer_than_size_is_absorbed_by_next_chunk() -> None:
+    chunks = FixedSizeChunker(size=2, overlap=0).chunk(
+        [Document(id="doc-1", text="ab    cd")]
+    )
+
+    assert [(chunk.text, chunk.start_offset, chunk.end_offset) for chunk in chunks] == [
+        ("ab", 0, 2),
+        ("    cd", 2, 8),
+    ]
+
+
+def test_leading_whitespace_is_absorbed_by_first_chunk() -> None:
+    chunks = FixedSizeChunker(size=2, overlap=0).chunk(
+        [Document(id="doc-1", text="   ab")]
+    )
+
+    assert [(chunk.text, chunk.start_offset, chunk.end_offset) for chunk in chunks] == [
+        ("   a", 0, 4),
+        ("b", 4, 5),
+    ]
+
+
+def test_trailing_whitespace_is_folded_into_final_chunk() -> None:
+    chunks = FixedSizeChunker(size=2, overlap=0).chunk(
+        [Document(id="doc-1", text="ab   ")]
+    )
+
+    assert [(chunk.text, chunk.start_offset, chunk.end_offset) for chunk in chunks] == [
+        ("ab   ", 0, 5)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("size", "overlap"),
+    [(1, 0), (2, 0), (2, 1), (3, 1), (5, 2), (7, 3)],
+)
+def test_chunking_covers_text_despite_whitespace_runs(size: int, overlap: int) -> None:
+    text = "  alpha  beta\n\n\ngamma   delta  "
+    document = Document(id="doc-1", text=text)
+
+    chunks = FixedSizeChunker(size=size, overlap=overlap).chunk_document(document)
+
+    covered = [False] * len(text)
+    for chunk in chunks:
+        assert chunk.text == text[chunk.start_offset : chunk.end_offset]
+        assert chunk.text.strip()
+        for offset in range(chunk.start_offset, chunk.end_offset):
+            covered[offset] = True
+    assert all(covered)
+    assert len({chunk.id for chunk in chunks}) == len(chunks)
+
+
 @pytest.mark.parametrize(
     ("size", "overlap"),
     [
