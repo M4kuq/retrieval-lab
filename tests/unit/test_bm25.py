@@ -8,7 +8,7 @@ import pytest
 
 from retrieval_lab.exceptions import RetrieverContractError
 from retrieval_lab.models import Chunk
-from retrieval_lab.retrievers.bm25 import BM25Retriever
+from retrieval_lab.retrievers.bm25 import BM25Retriever, _default_tokenizer
 
 
 def _chunk(
@@ -174,6 +174,61 @@ def test_default_tokenizer_applies_nfc_and_casefold() -> None:
     results = retriever.search("Stra\u00dfe Cafe\u0301", top_k=1)
 
     assert [result.chunk_id for result in results] == ["normalized"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Hello, WORLD 123", ("hello", "world", "123")),
+        (
+            "\u691c\u7d22\u54c1\u8cea\u30c6\u30b9\u30c8",
+            (
+                "\u691c",
+                "\u7d22",
+                "\u54c1",
+                "\u8cea",
+                "\u30c6",
+                "\u30b9",
+                "\u30c8",
+                "\u691c\u7d22",
+                "\u7d22\u54c1",
+                "\u54c1\u8cea",
+                "\u8cea\u30c6",
+                "\u30c6\u30b9",
+                "\u30b9\u30c8",
+            ),
+        ),
+        (
+            "abc\u691c\u7d22def",
+            ("abc", "\u691c", "\u7d22", "\u691c\u7d22", "def"),
+        ),
+        ("e\u0301clair", ("\u00e9clair",)),
+        ("\u0301abc", ("abc",)),
+        ("a\u0301\u0302b", ("\u00e1\u0302b",)),
+        (
+            "\ud55c\uad6d\uc5b4 test",
+            (
+                "\ud55c",
+                "\uad6d",
+                "\uc5b4",
+                "\ud55c\uad6d",
+                "\uad6d\uc5b4",
+                "test",
+            ),
+        ),
+        ("\u00df\u1e9e\ufb00", ("ssssff",)),
+        ("\u2460\u2461\u4f4d", ("\u2460\u2461", "\u4f4d")),
+        ("a\u0300b \u0300c", ("\u00e0b", "c")),
+        (
+            "\u03a9\u03bc\u03ad\u03b3\u03b13.14",
+            ("\u03c9\u03bc\u03ad\u03b3\u03b13", "14"),
+        ),
+    ],
+)
+def test_default_tokenizer_pins_character_classes(
+    text: str, expected: tuple[str, ...]
+) -> None:
+    assert _default_tokenizer(text) == expected
 
 
 def test_custom_tokenizer_controls_boundaries_and_empty_tokens_are_ignored() -> None:
