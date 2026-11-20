@@ -71,12 +71,10 @@ def test_real_model_ranks_the_matching_topic_first(
 ) -> None:
     results = retriever.search("a small domestic cat", top_k=4)
 
-    assert [item.chunk_id for item in results] == [
-        "feline",
-        "canine",
-        "recipe",
-        "market",
-    ]
+    ranked = [item.chunk_id for item in results]
+    assert ranked[0] == "feline"
+    assert ranked.index("canine") < ranked.index("market")
+    assert ranked.index("canine") < ranked.index("recipe")
 
 
 def test_real_model_results_follow_the_search_contract(

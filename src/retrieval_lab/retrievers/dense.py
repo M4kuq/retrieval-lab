@@ -674,8 +674,7 @@ def _read_resolved_revision(
     # only when the card names this model as its own base model; a fine-tune
     # card instead points at a different base repository.
     card_data = _safe_getattr(model, "model_card_data")
-    base_model = _safe_getattr(card_data, "base_model")
-    if base_model is None or base_model == model_id:
+    if _card_describes_model(card_data, model_id):
         from_card = _read_commit_candidate(card_data, ("base_model_revision",))
         if from_card is not None:
             return from_card
@@ -692,6 +691,27 @@ def _read_resolved_revision(
     if _is_commit_hash(requested_revision):
         return requested_revision
     return None
+
+
+def _card_describes_model(card_data: object | None, model_id: str) -> bool:
+    """Return whether model card data names this model as its own base.
+
+    A card whose base model is absent or names the requested model describes
+    the loaded weights.  A card naming a different repository, holding a
+    non-string base model, or whose base model cannot be read at all does
+    not establish the loaded model's revision.
+    """
+
+    if card_data is None:
+        return False
+    missing = object()
+    try:
+        base_model = getattr(card_data, "base_model", missing)
+    except Exception:
+        return False
+    if base_model is missing or base_model is None:
+        return True
+    return isinstance(base_model, str) and base_model == model_id
 
 
 def _safe_getattr(value: object, attribute: str) -> object | None:

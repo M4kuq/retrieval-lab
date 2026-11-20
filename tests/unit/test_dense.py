@@ -630,6 +630,47 @@ def test_resolved_revision_ignores_an_invalid_model_card_revision() -> None:
     )
 
 
+def test_resolved_revision_ignores_card_data_with_an_unreadable_base_model() -> None:
+    class GuardedCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def base_model(self) -> object:
+            raise RuntimeError("card unavailable")
+
+    model = SimpleNamespace(model_card_data=GuardedCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_a_non_string_base_model() -> None:
+    class RaisingEquality:
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("comparison unavailable")
+
+        def __hash__(self) -> int:
+            return 1
+
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=RaisingEquality(),
+            base_model_revision="e" * 40,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
 def test_default_adapter_reads_resolved_revision_from_model_card_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
