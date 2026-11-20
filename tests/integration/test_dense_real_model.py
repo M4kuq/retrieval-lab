@@ -58,17 +58,26 @@ CHUNKS = (
 CHUNKS_BY_ID = {chunk.id: chunk for chunk in CHUNKS}
 
 
-@pytest.fixture(scope="module")
-def retriever() -> DenseRetriever:
+def _indexed_retriever(revision: str | None) -> DenseRetriever:
     indexed = DenseRetriever(
         model_id=MODEL_ID,
-        revision=MODEL_REVISION,
+        revision=revision,
         query_prompt="",
         document_prompt="",
         batch_size=2,
     )
     indexed.index(CHUNKS)
     return indexed
+
+
+@pytest.fixture(scope="module")
+def retriever() -> DenseRetriever:
+    return _indexed_retriever(MODEL_REVISION)
+
+
+@pytest.fixture(scope="module")
+def unpinned_retriever() -> DenseRetriever:
+    return _indexed_retriever(None)
 
 
 def test_real_model_ranks_the_matching_topic_first(
@@ -115,4 +124,16 @@ def test_real_model_settings_report_identity_and_resolved_revision(
 
     assert settings["model_id"] == MODEL_ID
     assert settings["requested_revision"] == MODEL_REVISION
+    assert settings["resolved_revision"] == MODEL_REVISION
+
+
+def test_real_model_resolves_the_revision_without_a_pin(
+    unpinned_retriever: DenseRetriever,
+) -> None:
+    # With no revision requested, the recorded value can only come from the
+    # loaded model's own metadata, and it must name the weights the hub
+    # currently resolves the model id to (MODEL_REVISION).
+    settings = unpinned_retriever.settings
+
+    assert settings["requested_revision"] is None
     assert settings["resolved_revision"] == MODEL_REVISION
