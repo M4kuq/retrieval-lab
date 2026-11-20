@@ -666,6 +666,61 @@ def test_resolved_revision_ignores_card_data_with_a_failing_base_model() -> None
     )
 
 
+def test_resolved_revision_reads_model_card_data_with_no_base_model_named() -> None:
+    commit = "e" * 40
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=None,
+            base_model_revision=commit,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        == commit
+    )
+
+
+def test_resolved_revision_ignores_a_shadowed_unreadable_base_model() -> None:
+    class ShadowedCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def base_model(self) -> object:
+            raise AttributeError("base model unavailable")
+
+    card = ShadowedCard()
+    card.__dict__["base_model"] = "model/id"
+    model = SimpleNamespace(model_card_data=card)
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_an_unreadable_dict() -> None:
+    class ExplodingDictCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> dict[str, object]:
+            raise RuntimeError("dict unavailable")
+
+    model = SimpleNamespace(model_card_data=ExplodingDictCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
 def test_resolved_revision_ignores_a_non_string_base_model() -> None:
     class RaisingEquality:
         def __eq__(self, other: object) -> bool:
