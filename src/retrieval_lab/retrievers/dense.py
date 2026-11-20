@@ -171,6 +171,7 @@ class _SentenceTransformersEmbeddingBackend:
         )
         resolved_revision = _read_resolved_revision(
             model,
+            model_id=self._metadata.model_id,
             requested_revision=self._metadata.requested_revision,
         )
         if resolved_revision is not None:
@@ -648,6 +649,7 @@ def _normalize_vector(vector: tuple[float, ...], *, context: str) -> tuple[float
 def _read_resolved_revision(
     model: object,
     *,
+    model_id: str,
     requested_revision: str | None,
 ) -> str | None:
     """Read a full resolved commit hash from safe model metadata surfaces."""
@@ -667,6 +669,16 @@ def _read_resolved_revision(
     if from_config is not None:
         return from_config
 
+    # sentence-transformers records the revision its weights were resolved
+    # from on the model card data.  That revision describes the model itself
+    # only when the card names this model as its own base model; a fine-tune
+    # card instead points at a different base repository.
+    card_data = _safe_getattr(model, "model_card_data")
+    if _card_describes_model(card_data, model_id):
+        from_card = _read_commit_candidate(card_data, ("base_model_revision",))
+        if from_card is not None:
+            return from_card
+
     tokenizer = _safe_getattr(model, "tokenizer")
     init_kwargs = _safe_getattr(tokenizer, "init_kwargs")
     from_tokenizer = _read_commit_candidate(
@@ -679,6 +691,53 @@ def _read_resolved_revision(
     if _is_commit_hash(requested_revision):
         return requested_revision
     return None
+
+
+def _card_describes_model(card_data: object | None, model_id: str) -> bool:
+    """Return whether model card data names this model as its own base.
+
+    A card whose base model is absent or names the requested model describes
+    the loaded weights.  A card naming a different repository, holding a
+    non-string base model, or whose base model cannot be read at all does
+    not establish the loaded model's revision.
+    """
+
+    if card_data is None:
+        return False
+    missing = object()
+    try:
+        base_model = getattr(card_data, "base_model", missing)
+    except Exception:
+        return False
+    if base_model is missing:
+        # The getattr default fires both for a genuinely absent attribute
+        # and for an accessor that raised AttributeError; only the former
+        # counts as "no base model named".
+        return not _attribute_present(card_data, "base_model")
+    if base_model is None:
+        return True
+    try:
+        return isinstance(base_model, str) and bool(base_model == model_id)
+    except Exception:
+        return False
+
+
+def _attribute_present(value: object, attribute: str) -> bool:
+    """Return whether ``attribute`` exists on ``value`` without reading it.
+
+    Any introspection failure resolves to "present": a card whose base
+    model cannot be ruled out must not have its revision trusted.
+    """
+
+    try:
+        if any(attribute in vars(cls) for cls in type(value).__mro__):
+            return True
+        namespace = value.__dict__
+        if not isinstance(namespace, dict):
+            return True
+        return attribute in namespace
+    except Exception:
+        return True
 
 
 def _safe_getattr(value: object, attribute: str) -> object | None:

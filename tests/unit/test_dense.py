@@ -527,11 +527,18 @@ def test_resolved_revision_reads_nested_commit_metadata() -> None:
         tokenizer=SimpleNamespace(init_kwargs={"_commit_hash": tokenizer_commit}),
     )
 
-    assert dense._read_resolved_revision(model, requested_revision=None) == commit
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        == commit
+    )
 
     attr_model = SimpleNamespace(config=SimpleNamespace(commit_hash=tokenizer_commit))
     assert (
-        dense._read_resolved_revision(attr_model, requested_revision=None)
+        dense._read_resolved_revision(
+            attr_model, model_id="model/id", requested_revision=None
+        )
         == tokenizer_commit
     )
 
@@ -547,10 +554,353 @@ def test_resolved_revision_ignores_invalid_values_and_uses_requested_commit() ->
     )
 
     assert (
-        dense._read_resolved_revision(model, requested_revision=requested_commit)
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=requested_commit
+        )
         == requested_commit
     )
-    assert dense._read_resolved_revision(model, requested_revision="main") is None
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision="main"
+        )
+        is None
+    )
+
+
+def test_resolved_revision_reads_model_card_data_for_the_same_base_model() -> None:
+    commit = "e" * 40
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model="model/id",
+            base_model_revision=commit,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        == commit
+    )
+
+
+def test_resolved_revision_reads_model_card_data_without_a_base_model() -> None:
+    commit = "e" * 64
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(base_model_revision=commit),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        == commit
+    )
+
+
+def test_resolved_revision_ignores_model_card_data_for_another_base_model() -> None:
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model="other/base-model",
+            base_model_revision="e" * 40,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_an_invalid_model_card_revision() -> None:
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model="model/id",
+            base_model_revision="main",
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_an_unreadable_base_model() -> None:
+    class GuardedCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def base_model(self) -> object:
+            raise RuntimeError("card unavailable")
+
+    model = SimpleNamespace(model_card_data=GuardedCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_a_failing_base_model() -> None:
+    class AttributeErrorCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def base_model(self) -> object:
+            raise AttributeError("base model unavailable")
+
+    model = SimpleNamespace(model_card_data=AttributeErrorCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_reads_model_card_data_with_no_base_model_named() -> None:
+    commit = "e" * 40
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=None,
+            base_model_revision=commit,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        == commit
+    )
+
+
+def test_resolved_revision_ignores_a_shadowed_unreadable_base_model() -> None:
+    class ShadowedCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def base_model(self) -> object:
+            raise AttributeError("base model unavailable")
+
+    card = ShadowedCard()
+    card.__dict__["base_model"] = "model/id"
+    model = SimpleNamespace(model_card_data=card)
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_an_unreadable_dict() -> None:
+    class ExplodingDictCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> dict[str, object]:
+            raise RuntimeError("dict unavailable")
+
+    model = SimpleNamespace(model_card_data=ExplodingDictCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_a_failing_dict() -> None:
+    class AttributeErrorDictCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> dict[str, object]:
+            raise AttributeError("dict unavailable")
+
+    model = SimpleNamespace(model_card_data=AttributeErrorDictCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_an_unreadable_class() -> None:
+    class ExplodingMeta(type):
+        @property
+        def __dict__(self) -> dict[str, object]:
+            raise RuntimeError("class dict unavailable")
+
+    class WeirdCard(metaclass=ExplodingMeta):
+        base_model_revision = "e" * 40
+
+    model = SimpleNamespace(model_card_data=WeirdCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_a_base_model_with_raising_equality() -> None:
+    class RaisingEqualityString(str):
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("comparison unavailable")
+
+        def __hash__(self) -> int:
+            return str.__hash__(self)
+
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=RaisingEqualityString("model/id"),
+            base_model_revision="e" * 40,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_a_raising_dict_lookup() -> None:
+    class RaisingContainsDict(dict):
+        def __contains__(self, key: object) -> bool:
+            raise RuntimeError("contains unavailable")
+
+    class ContainsCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> dict[str, object]:
+            return RaisingContainsDict()
+
+    model = SimpleNamespace(model_card_data=ContainsCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_a_non_dict_namespace() -> None:
+    class NonDictCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> object:
+            return "not-a-dict"
+
+    model = SimpleNamespace(model_card_data=NonDictCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_a_base_model_with_a_raising_class() -> None:
+    class ClassSpoof:
+        @property
+        def __class__(self) -> object:
+            raise RuntimeError("class unavailable")
+
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=ClassSpoof(),
+            base_model_revision="e" * 40,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_a_non_string_base_model() -> None:
+    class RaisingEquality:
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("comparison unavailable")
+
+        def __hash__(self) -> int:
+            return 1
+
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=RaisingEquality(),
+            base_model_revision="e" * 40,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_default_adapter_reads_resolved_revision_from_model_card_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit = "f" * 40
+
+    class FakeSentenceTransformer:
+        model_card_data = SimpleNamespace(
+            base_model="model/id",
+            base_model_revision=commit,
+        )
+
+        def encode(
+            self,
+            sentences: Sequence[str],
+            *,
+            batch_size: int,
+            normalize_embeddings: bool,
+            convert_to_numpy: bool,
+            show_progress_bar: bool,
+            prompt: str,
+        ) -> object:
+            return [[1.0, 0.0] for _ in sentences]
+
+    monkeypatch.setattr(
+        dense,
+        "import_module",
+        lambda module_name: SimpleNamespace(
+            SentenceTransformer=lambda model_id, *, revision=None: (
+                FakeSentenceTransformer()
+            )
+        ),
+    )
+    retriever = DenseRetriever(model_id="model/id")
+    retriever.index([_chunk("document", "document")])
+
+    assert retriever.settings["resolved_revision"] == commit
 
 
 def test_settings_have_all_dense_reproducibility_values() -> None:
@@ -834,7 +1184,9 @@ def test_resolved_revision_falls_back_to_tokenizer_metadata() -> None:
     )
 
     assert (
-        dense._read_resolved_revision(model, requested_revision=None)
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
         == tokenizer_commit
     )
 
@@ -846,7 +1198,10 @@ def test_resolved_revision_tolerates_raising_attribute_access() -> None:
             raise RuntimeError("config unavailable")
 
     assert (
-        dense._read_resolved_revision(GuardedModel(), requested_revision=None) is None
+        dense._read_resolved_revision(
+            GuardedModel(), model_id="model/id", requested_revision=None
+        )
+        is None
     )
 
 
@@ -857,7 +1212,12 @@ def test_resolved_revision_tolerates_a_broken_mapping_get() -> None:
 
     model = SimpleNamespace(config=BrokenGetDict({"_commit_hash": "a" * 40}))
 
-    assert dense._read_resolved_revision(model, requested_revision=None) is None
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
 
 
 def test_cache_identity_float_values_must_be_finite() -> None:
