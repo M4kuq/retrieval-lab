@@ -648,6 +648,24 @@ def test_resolved_revision_ignores_card_data_with_an_unreadable_base_model() -> 
     )
 
 
+def test_resolved_revision_ignores_card_data_with_a_failing_base_model() -> None:
+    class AttributeErrorCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def base_model(self) -> object:
+            raise AttributeError("base model unavailable")
+
+    model = SimpleNamespace(model_card_data=AttributeErrorCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
 def test_resolved_revision_ignores_a_non_string_base_model() -> None:
     class RaisingEquality:
         def __eq__(self, other: object) -> bool:

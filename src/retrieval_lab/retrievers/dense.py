@@ -709,9 +709,26 @@ def _card_describes_model(card_data: object | None, model_id: str) -> bool:
         base_model = getattr(card_data, "base_model", missing)
     except Exception:
         return False
-    if base_model is missing or base_model is None:
+    if base_model is missing:
+        # The getattr default fires both for a genuinely absent attribute
+        # and for an accessor that raised AttributeError; only the former
+        # counts as "no base model named".
+        return not _attribute_present(card_data, "base_model")
+    if base_model is None:
         return True
     return isinstance(base_model, str) and base_model == model_id
+
+
+def _attribute_present(value: object, attribute: str) -> bool:
+    """Return whether ``attribute`` exists on ``value`` without reading it."""
+
+    try:
+        namespace = getattr(value, "__dict__", None)
+        if isinstance(namespace, dict) and attribute in namespace:
+            return True
+        return any(attribute in vars(cls) for cls in type(value).__mro__)
+    except Exception:
+        return True
 
 
 def _safe_getattr(value: object, attribute: str) -> object | None:
