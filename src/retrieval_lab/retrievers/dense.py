@@ -171,6 +171,7 @@ class _SentenceTransformersEmbeddingBackend:
         )
         resolved_revision = _read_resolved_revision(
             model,
+            model_id=self._metadata.model_id,
             requested_revision=self._metadata.requested_revision,
         )
         if resolved_revision is not None:
@@ -648,6 +649,7 @@ def _normalize_vector(vector: tuple[float, ...], *, context: str) -> tuple[float
 def _read_resolved_revision(
     model: object,
     *,
+    model_id: str,
     requested_revision: str | None,
 ) -> str | None:
     """Read a full resolved commit hash from safe model metadata surfaces."""
@@ -666,6 +668,17 @@ def _read_resolved_revision(
     )
     if from_config is not None:
         return from_config
+
+    # sentence-transformers records the revision its weights were resolved
+    # from on the model card data.  That revision describes the model itself
+    # only when the card names this model as its own base model; a fine-tune
+    # card instead points at a different base repository.
+    card_data = _safe_getattr(model, "model_card_data")
+    base_model = _safe_getattr(card_data, "base_model")
+    if base_model is None or base_model == model_id:
+        from_card = _read_commit_candidate(card_data, ("base_model_revision",))
+        if from_card is not None:
+            return from_card
 
     tokenizer = _safe_getattr(model, "tokenizer")
     init_kwargs = _safe_getattr(tokenizer, "init_kwargs")
