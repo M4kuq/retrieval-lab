@@ -721,6 +721,66 @@ def test_resolved_revision_ignores_card_data_with_an_unreadable_dict() -> None:
     )
 
 
+def test_resolved_revision_ignores_card_data_with_a_failing_dict() -> None:
+    class AttributeErrorDictCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> dict[str, object]:
+            raise AttributeError("dict unavailable")
+
+    model = SimpleNamespace(model_card_data=AttributeErrorDictCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_an_unreadable_class() -> None:
+    class ExplodingMeta(type):
+        @property
+        def __dict__(self) -> dict[str, object]:
+            raise RuntimeError("class dict unavailable")
+
+    class WeirdCard(metaclass=ExplodingMeta):
+        base_model_revision = "e" * 40
+
+    model = SimpleNamespace(model_card_data=WeirdCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_a_base_model_with_raising_equality() -> None:
+    class RaisingEqualityString(str):
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("comparison unavailable")
+
+        def __hash__(self) -> int:
+            return str.__hash__(self)
+
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=RaisingEqualityString("model/id"),
+            base_model_revision="e" * 40,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
 def test_resolved_revision_ignores_a_non_string_base_model() -> None:
     class RaisingEquality:
         def __eq__(self, other: object) -> bool:

@@ -716,19 +716,31 @@ def _card_describes_model(card_data: object | None, model_id: str) -> bool:
         return not _attribute_present(card_data, "base_model")
     if base_model is None:
         return True
-    return isinstance(base_model, str) and base_model == model_id
+    if not isinstance(base_model, str):
+        return False
+    try:
+        return bool(base_model == model_id)
+    except Exception:
+        return False
 
 
 def _attribute_present(value: object, attribute: str) -> bool:
-    """Return whether ``attribute`` exists on ``value`` without reading it."""
+    """Return whether ``attribute`` exists on ``value`` without reading it.
+
+    Any introspection failure resolves to "present": a card whose base
+    model cannot be ruled out must not have its revision trusted.
+    """
 
     try:
-        namespace = getattr(value, "__dict__", None)
-        if isinstance(namespace, dict) and attribute in namespace:
+        if any(attribute in vars(cls) for cls in type(value).__mro__):
             return True
-        return any(attribute in vars(cls) for cls in type(value).__mro__)
     except Exception:
         return True
+    try:
+        namespace = value.__dict__
+    except Exception:
+        return True
+    return isinstance(namespace, dict) and attribute in namespace
 
 
 def _safe_getattr(value: object, attribute: str) -> object | None:
