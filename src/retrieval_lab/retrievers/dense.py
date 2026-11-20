@@ -716,10 +716,8 @@ def _card_describes_model(card_data: object | None, model_id: str) -> bool:
         return not _attribute_present(card_data, "base_model")
     if base_model is None:
         return True
-    if not isinstance(base_model, str):
-        return False
     try:
-        return bool(base_model == model_id)
+        return isinstance(base_model, str) and bool(base_model == model_id)
     except Exception:
         return False
 
@@ -734,13 +732,12 @@ def _attribute_present(value: object, attribute: str) -> bool:
     try:
         if any(attribute in vars(cls) for cls in type(value).__mro__):
             return True
-    except Exception:
-        return True
-    try:
         namespace = value.__dict__
+        if not isinstance(namespace, dict):
+            return True
+        return attribute in namespace
     except Exception:
         return True
-    return isinstance(namespace, dict) and attribute in namespace
 
 
 def _safe_getattr(value: object, attribute: str) -> object | None:

@@ -781,6 +781,67 @@ def test_resolved_revision_ignores_a_base_model_with_raising_equality() -> None:
     )
 
 
+def test_resolved_revision_ignores_card_data_with_a_raising_dict_lookup() -> None:
+    class RaisingContainsDict(dict):
+        def __contains__(self, key: object) -> bool:
+            raise RuntimeError("contains unavailable")
+
+    class ContainsCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> dict[str, object]:
+            return RaisingContainsDict()
+
+    model = SimpleNamespace(model_card_data=ContainsCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_card_data_with_a_non_dict_namespace() -> None:
+    class NonDictCard:
+        base_model_revision = "e" * 40
+
+        @property
+        def __dict__(self) -> object:
+            return "not-a-dict"
+
+    model = SimpleNamespace(model_card_data=NonDictCard())
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
+def test_resolved_revision_ignores_a_base_model_with_a_raising_class() -> None:
+    class ClassSpoof:
+        @property
+        def __class__(self) -> object:
+            raise RuntimeError("class unavailable")
+
+    model = SimpleNamespace(
+        model_card_data=SimpleNamespace(
+            base_model=ClassSpoof(),
+            base_model_revision="e" * 40,
+        ),
+    )
+
+    assert (
+        dense._read_resolved_revision(
+            model, model_id="model/id", requested_revision=None
+        )
+        is None
+    )
+
+
 def test_resolved_revision_ignores_a_non_string_base_model() -> None:
     class RaisingEquality:
         def __eq__(self, other: object) -> bool:

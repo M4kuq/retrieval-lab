@@ -18,6 +18,8 @@ pytest.importorskip(
     reason="dense extra is not installed",
 )
 
+from huggingface_hub import HfApi
+
 from retrieval_lab import DenseRetriever
 from retrieval_lab.models import Chunk
 
@@ -114,3 +116,6 @@ def test_real_model_settings_report_identity_and_resolved_revision(
     assert isinstance(resolved, str)
     assert len(resolved) == 40
     assert all(character in "0123456789abcdef" for character in resolved)
+    # The recorded revision must be the commit the hub currently resolves
+    # the unpinned model id to, not merely a well-formed hash.
+    assert resolved == HfApi().model_info(MODEL_ID).sha
