@@ -11,6 +11,7 @@ expectations below run against fixed weights.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +19,8 @@ pytest.importorskip(
     "sentence_transformers",
     reason="dense extra is not installed",
 )
+
+from huggingface_hub import snapshot_download
 
 from retrieval_lab import DenseRetriever
 from retrieval_lab.models import Chunk
@@ -131,9 +134,13 @@ def test_real_model_resolves_the_revision_without_a_pin(
     unpinned_retriever: DenseRetriever,
 ) -> None:
     # With no revision requested, the recorded value can only come from the
-    # loaded model's own metadata, and it must name the weights the hub
-    # currently resolves the model id to (MODEL_REVISION).
+    # loaded model's own metadata.  The expectation is the snapshot the
+    # local cache resolved the model id to, read from the cache layout
+    # independently of the adapter: neither a live hub query (which could
+    # race the load) nor a hard-coded commit (which assumes the default
+    # branch never moves).
+    expected = Path(snapshot_download(MODEL_ID, local_files_only=True)).name
     settings = unpinned_retriever.settings
 
     assert settings["requested_revision"] is None
-    assert settings["resolved_revision"] == MODEL_REVISION
+    assert settings["resolved_revision"] == expected
