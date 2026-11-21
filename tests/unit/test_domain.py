@@ -46,6 +46,17 @@ def test_document_rejects_non_json_metadata(metadata: object) -> None:
         Document("doc-1", "text", metadata)  # type: ignore[arg-type]
 
 
+def test_document_rejects_non_string_key_in_nested_metadata() -> None:
+    with pytest.raises(
+        CorpusValidationError, match=r"metadata\.outer keys must be strings"
+    ):
+        Document(
+            id="d1",
+            text="hello",
+            metadata={"outer": {123: "v"}},  # type: ignore[dict-item]
+        )
+
+
 def test_document_validates_optional_source() -> None:
     with pytest.raises(CorpusValidationError, match="source"):
         Document("doc-1", "text", source=" ")

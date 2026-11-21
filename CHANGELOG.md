@@ -13,6 +13,11 @@ cut.
 
 ### Added
 
+- Tests pinning reachable error paths in metadata validation and the
+  dataset bundle workflow: a non-string key in nested `Document`
+  metadata raises `CorpusValidationError`, and an `OSError` while
+  inspecting a dataset bundle directory or reading its manifest is
+  converted to `DatasetValidationError`.
 - Tests pinning validation paths across shipped modules:
   `KeywordRetriever.index_size_bytes` follows the index lifecycle
   (None before indexing, 0 for an empty index, a deterministic
