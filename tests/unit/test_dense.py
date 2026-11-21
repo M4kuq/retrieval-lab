@@ -290,6 +290,21 @@ def test_query_vector_contract_and_dimension_errors_are_rejected() -> None:
         retriever.search("zero", top_k=1)
 
 
+def test_search_rejects_indexed_state_without_a_recorded_dimension() -> None:
+    backend = FakeEmbeddingBackend(
+        {
+            ("passage: document",): [[1.0, 0.0]],
+            ("query: find",): [[1.0, 0.0]],
+        }
+    )
+    retriever = DenseRetriever(backend=backend)
+    retriever.index([_chunk("document", "document")])
+    retriever._dimension = None
+
+    with pytest.raises(RetrieverContractError, match="no dimension is recorded"):
+        retriever.search("find", top_k=1)
+
+
 def test_backend_failures_are_wrapped_but_library_errors_propagate() -> None:
     class FailingBackend:
         metadata = EmbeddingModelMetadata(model_id="failing")

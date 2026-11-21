@@ -451,7 +451,10 @@ class DenseRetriever(BaseRetriever):
                 "dense backend identity or revision changed after indexing"
             )
         if self._dimension is None:
-            return []
+            raise RetrieverContractError(
+                "dense index is inconsistent: chunks are indexed but no "
+                "dimension is recorded"
+            )
         if len(query_vector) != self._dimension:
             raise RetrieverContractError(
                 "dense query embedding dimension does not match the indexed "
