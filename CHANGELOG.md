@@ -147,6 +147,10 @@ cut.
 
 ### Fixed
 
+- Removed an unreachable empty-path check in the application layer and
+  made `DenseRetriever.search` fail closed with a
+  `RetrieverContractError` when an indexed state has no recorded
+  dimension, instead of silently returning no results.
 - Restored `ruff check` and `ruff format` compliance on `main` after the
   v0.4 changes landed, so the CI quality job is green again (#29).
 - Chunk-level precomputed and fused runs are comparable again:

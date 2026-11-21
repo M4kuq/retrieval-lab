@@ -739,8 +739,6 @@ def _path_from_input(value: str | os.PathLike[str] | None, field: str) -> Path:
         path = Path(value)
     except (TypeError, ValueError) as exc:
         raise ConfigurationError(f"{field} must be a valid path") from exc
-    if not str(path):
-        raise ConfigurationError(f"{field} must not be empty")
     return path
 
 
