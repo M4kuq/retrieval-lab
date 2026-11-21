@@ -148,6 +148,41 @@ def test_finalize_dataset_bundle_rejects_pending_queries(tmp_path: Path) -> None
         finalize_dataset_bundle(bundle)
 
 
+def test_load_dataset_draft_wraps_bundle_inspection_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+
+    def broken_is_dir(self: Path) -> bool:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "is_dir", broken_is_dir)
+
+    with pytest.raises(
+        DatasetValidationError, match="cannot inspect dataset bundle path"
+    ):
+        load_dataset_draft(bundle)
+
+
+def test_load_dataset_draft_wraps_manifest_read_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "bundle"
+    DatasetDraft([DraftQuery("q-1", "query")]).save_bundle(bundle)
+    original_read_bytes = Path.read_bytes
+
+    def flaky_read_bytes(self: Path) -> bytes:
+        if self.name == "dataset-manifest.json":
+            raise OSError("denied")
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
+
+    with pytest.raises(DatasetValidationError, match="cannot read dataset manifest"):
+        load_dataset_draft(bundle)
+
+
 def test_manifest_derived_fields_cannot_be_forged(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     DatasetDraft(
