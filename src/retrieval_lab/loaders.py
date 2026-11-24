@@ -46,8 +46,6 @@ def load_documents(
             identifier_locations[document.id] = location
             documents.append(document)
 
-    if not documents:
-        raise CorpusValidationError(f"corpus contains no documents: {source}")
     return tuple(documents)
 
 
@@ -197,8 +195,6 @@ def _load_jsonl(path: Path, *, source: str) -> tuple[Document, ...]:
             )
         identifiers[document.id] = line_number
         documents.append(document)
-    if not documents:
-        raise CorpusValidationError(f"{path}:1: corpus JSONL must not be empty")
     return tuple(documents)
 
 
