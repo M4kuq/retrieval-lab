@@ -93,8 +93,6 @@ def _cache_root(cache_dir: str | os.PathLike[str]) -> Path:
         root = Path(cache_dir)
     except (TypeError, ValueError) as exc:
         raise EvaluationError("cache_dir must be a valid path") from exc
-    if not str(root):
-        raise EvaluationError("cache_dir must not be empty")
     return root
 
 

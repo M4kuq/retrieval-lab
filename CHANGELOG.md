@@ -13,6 +13,13 @@ cut.
 
 ### Removed
 
+- Three more unreachable empty guards: the empty-result guard in
+  `EvaluationDataset.from_jsonl` (the input text is already checked
+  non-empty and every line either raises or appends a query), and the
+  `str(Path)` emptiness guards for `cache_dir` in the cache root helper
+  and `EvaluationRunner` (blank strings are already rejected and
+  `pathlib` normalises an empty path to `.`, so the constructed path
+  is never empty). Observable behaviour is unchanged.
 - Two unreachable empty-result guards in the corpus loaders
   (`load_documents` and `_load_jsonl`). File discovery already raises
   unless at least one supported file is selected, and each loader
