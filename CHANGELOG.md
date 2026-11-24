@@ -11,6 +11,14 @@ Changes since 0.1.0rc1, developed under the internal v0.2–v0.4 milestones.
 The package version remains 0.1.0rc1 until the next release candidate is
 cut.
 
+### Removed
+
+- Two unreachable empty-result guards in the corpus loaders
+  (`load_documents` and `_load_jsonl`). File discovery already raises
+  unless at least one supported file is selected, and each loader
+  returns at least one document or raises, so the guards could never
+  fire; observable behaviour is unchanged.
+
 ### Added
 
 - Tests pinning reachable error paths in metadata validation and the
