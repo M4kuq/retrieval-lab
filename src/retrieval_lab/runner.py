@@ -131,8 +131,6 @@ class EvaluationRunner:
                 self._cache_dir = Path(cache_dir)
             except (TypeError, ValueError) as exc:
                 raise ConfigurationError("cache_dir must be a valid path") from exc
-            if not str(self._cache_dir):
-                raise ConfigurationError("cache_dir must not be empty")
         self._config_settings = (
             plain_json(_config_settings) if _config_settings is not None else None
         )

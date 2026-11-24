@@ -115,8 +115,6 @@ class EvaluationDataset:
             if reference_answer is not None:
                 answers_by_query[query.id] = reference_answer
 
-        if not queries:
-            raise _dataset_error(source, 1, "dataset must not be empty")
         return cls(
             queries,
             relevance_level=level,
