@@ -278,8 +278,7 @@ def evaluate_quality_gates(
                 )
             )
         if gate.max_absolute_drop is not None:
-            if delta is None or baseline is None:
-                raise ConfigurationError("drop quality gates require a baseline")
+            assert delta is not None and baseline is not None
             checks.append(
                 _check_drop_constraint(
                     gate=gate,
@@ -292,8 +291,7 @@ def evaluate_quality_gates(
                 )
             )
         if gate.max_relative_drop is not None:
-            if delta is None or baseline is None:
-                raise ConfigurationError("drop quality gates require a baseline")
+            assert delta is not None and baseline is not None
             checks.append(
                 _check_drop_constraint(
                     gate=gate,

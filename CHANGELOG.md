@@ -13,6 +13,14 @@ cut.
 
 ### Removed
 
+- Two unreachable `None` guards in the quality-gate drop-constraint
+  blocks (`max_absolute_drop` / `max_relative_drop`). The earlier
+  `has_drop` check already requires a baseline, and a gate carrying a
+  drop constraint always receives a delta from `_comparison_delta`
+  (which returns or raises), so neither value can be `None` there;
+  the blocks now assert the same invariant the function already
+  asserts when building the comparison. Observable behaviour is
+  unchanged.
 - Three more unreachable empty guards: the empty-result guard in
   `EvaluationDataset.from_jsonl` (the input text is already checked
   non-empty and every line either raises or appends a query), and the
