@@ -19,7 +19,8 @@ cut.
   `str(Path)` emptiness guards for `cache_dir` in the cache root helper
   and `EvaluationRunner` (blank strings are already rejected and
   `pathlib` normalises an empty path to `.`, so the constructed path
-  is never empty). Observable behaviour is unchanged.
+  is never empty under an unmodified `pathlib`). Observable behaviour
+  is unchanged.
 - Two unreachable empty-result guards in the corpus loaders
   (`load_documents` and `_load_jsonl`). File discovery already raises
   unless at least one supported file is selected, and each loader
