@@ -37,6 +37,12 @@ cut.
 
 ### Added
 
+- Tests pinning relevance-grade ID validation in `EvaluationDataset`:
+  empty, blank, or non-string grade IDs fail the preceding
+  exact-match check, while a string-equal non-`str` key (such as
+  `collections.UserString`) passes that check and is rejected by the
+  non-empty guard with a `DatasetValidationError`. The guard only
+  looked unreachable; the new test keeps it covered.
 - Tests pinning the config loader's `corpus.include` handling: an
   explicit YAML null is treated exactly like an omitted `include`
   (an empty pattern tuple), matching the loader's existing branch.
