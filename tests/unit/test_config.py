@@ -104,6 +104,20 @@ def test_load_config_and_yaml_runner_are_deterministic(tmp_path: Path) -> None:
     assert str(tmp_path) not in result.to_json()
 
 
+def test_load_config_treats_null_include_as_omitted(tmp_path: Path) -> None:
+    path = _write_fixture(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace('  include: ["**/*.txt"]', "  include:"), encoding="utf-8"
+    )
+    config = load_config(path)
+    assert config.corpus.include == ()
+    assert config.normalized_settings()["corpus"]["include"] == []  # type: ignore[index]
+
+    path.write_text(text.replace('  include: ["**/*.txt"]\n', ""), encoding="utf-8")
+    assert load_config(path).corpus == config.corpus
+
+
 def test_runner_config_include_no_match_reports_actionable_error(
     tmp_path: Path,
 ) -> None:

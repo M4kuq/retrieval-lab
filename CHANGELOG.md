@@ -37,6 +37,9 @@ cut.
 
 ### Added
 
+- Tests pinning the config loader's `corpus.include` handling: an
+  explicit YAML null is treated exactly like an omitted `include`
+  (an empty pattern tuple), matching the loader's existing branch.
 - Tests pinning reachable error paths in metadata validation and the
   dataset bundle workflow: a non-string key in nested `Document`
   metadata raises `CorpusValidationError`, and an `OSError` while
