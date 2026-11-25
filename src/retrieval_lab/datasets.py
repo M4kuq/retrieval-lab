@@ -269,10 +269,7 @@ def _normalize_relevance_grades(
             )
         grades: dict[str, int] = {}
         for identifier, grade in values.items():
-            if not isinstance(identifier, str) or not identifier.strip():
-                raise DatasetValidationError(
-                    f"relevance ID for query {query_id!r} must be non-empty"
-                )
+            assert isinstance(identifier, str) and identifier.strip()
             if isinstance(grade, bool) or not isinstance(grade, int) or grade < 1:
                 raise DatasetValidationError(
                     f"relevance for query {query_id!r}, ID {identifier!r} must "

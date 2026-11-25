@@ -13,6 +13,14 @@ cut.
 
 ### Removed
 
+- The unreachable non-empty guard on relevance grade IDs in
+  `_normalize_relevance_grades`. The preceding check already requires
+  the supplied grade IDs to exactly match the query's positive
+  relevance IDs, and `EvaluationQuery` validates those IDs as
+  non-empty strings, so an empty, blank, or non-string grade ID always
+  fails the match check first; the loop now asserts that invariant.
+  Observable behaviour is unchanged, and a test pins the mismatch
+  error for such IDs.
 - Two unreachable `None` guards in the quality-gate drop-constraint
   blocks (`max_absolute_drop` / `max_relative_drop`). The earlier
   `has_drop` check already requires a baseline, and a gate carrying a
