@@ -13,6 +13,16 @@ cut.
 
 ### Removed
 
+- The `relative_delta is None` guard in `_relative_regression`, which
+  was unreachable through the public quality-gate APIs. Those APIs
+  build their deltas only via `_metric_delta`, whose `_relative`
+  helper pairs `None` exclusively with the `baseline_zero` status
+  (handled by the preceding branch) and always supplies a float for
+  the `defined` status, so the guard could never fire; the branch now
+  asserts that invariant. Observable behaviour is unchanged, and the
+  existing quality-gate tests pin the defined-status regressed cases
+  for both directions, a defined-status improvement, and the
+  baseline-zero cases.
 - Two unreachable `None` guards in the quality-gate drop-constraint
   blocks (`max_absolute_drop` / `max_relative_drop`). The earlier
   `has_drop` check already requires a baseline, and a gate carrying a

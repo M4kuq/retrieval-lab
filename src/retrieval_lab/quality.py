@@ -117,8 +117,7 @@ def _relative_regression(
         if delta.classification == "regressed":
             return None
         return 0.0
-    if delta.relative_delta is None:
-        return None
+    assert delta.relative_delta is not None
     if delta.classification != "regressed":
         return 0.0
     if delta.direction == "higher_is_better":
