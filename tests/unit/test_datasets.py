@@ -1,3 +1,4 @@
+from collections import UserString
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -105,6 +106,16 @@ def test_constructor_rejects_non_positive_grade_ids_as_mismatch(
         EvaluationDataset(
             [query],
             relevance_grades_by_query={"q-1": {identifier: 1}},  # type: ignore[dict-item]
+        )
+
+
+def test_constructor_rejects_string_equal_non_string_grade_id() -> None:
+    query = EvaluationQuery("q-1", "query", relevant_document_ids={"doc-1"})
+
+    with pytest.raises(DatasetValidationError, match="must be non-empty"):
+        EvaluationDataset(
+            [query],
+            relevance_grades_by_query={"q-1": {UserString("doc-1"): 1}},  # type: ignore[dict-item]
         )
 
 
