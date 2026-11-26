@@ -13,6 +13,21 @@ cut.
 
 ### Removed
 
+- The empty-values guard in answer evaluation `_mean`, which was
+  unreachable through its only callers once the result constructor
+  normalizes its input. `AnswerEvaluationResult.__post_init__` now
+  stores `evaluations` as a plain `tuple` before the emptiness check
+  (a falsy non-iterable input raises the same emptiness
+  `EvaluationError` as before), so a `tuple` subclass overriding
+  `__len__` cannot pass the check while yielding no items; with that
+  normalization the constructor rejects empty evaluations, the
+  `_mean` calls in `to_dict` always receive at least one value, and
+  `_mean_optional` returns `None` without calling `_mean` when every
+  value is `None`, so the helper now asserts the invariant.
+  Observable behaviour is unchanged for plain tuples, and the answer-evaluation tests pin the empty-result
+  rejection (including the lying-`__len__` subclass and non-iterable
+  inputs), the subclass normalization, the all-`None` optional means,
+  and the non-finite mean rejection in `to_dict`.
 - The `request <= 0` guard in the result artifact `_read_bounded`
   loop, which was unreachable for plain-integer limits. Its only
   caller passes a limit validated as a positive integer, and the loop

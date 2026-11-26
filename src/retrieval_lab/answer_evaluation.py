@@ -149,6 +149,20 @@ class AnswerEvaluationResult:
     evaluations: tuple[AnswerEvaluation, ...]
 
     def __post_init__(self) -> None:
+        if type(self.evaluations) is tuple:
+            normalized = self.evaluations
+        else:
+            try:
+                iterator = iter(self.evaluations)
+            except TypeError as exc:
+                raise EvaluationError("answer evaluations must not be empty") from exc
+            try:
+                normalized = tuple(item for item in iterator)
+            except TypeError as exc:
+                raise EvaluationError(
+                    "answer evaluations could not be iterated"
+                ) from exc
+        object.__setattr__(self, "evaluations", normalized)
         if not self.evaluations:
             raise EvaluationError("answer evaluations must not be empty")
         seen: set[str] = set()
@@ -466,8 +480,7 @@ def _ratio(numerator: int, denominator: int) -> float:
 
 def _mean(values: Iterable[float]) -> float:
     normalized = tuple(values)
-    if not normalized:
-        raise EvaluationError("cannot calculate mean of empty values")
+    assert normalized
     if any(not math.isfinite(value) for value in normalized):
         raise EvaluationError("mean values must be finite")
     return sum(normalized) / len(normalized)
