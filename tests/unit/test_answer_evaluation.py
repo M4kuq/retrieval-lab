@@ -1,4 +1,5 @@
 import math
+import sys
 
 import pytest
 
@@ -375,6 +376,80 @@ def test_answer_reference_rejects_non_bool_answerable(value: object) -> None:
 def test_result_rejects_empty_evaluations() -> None:
     with pytest.raises(EvaluationError, match="must not be empty"):
         AnswerEvaluationResult(())
+
+
+def test_result_optional_means_are_none_when_nothing_was_measured() -> None:
+    evaluation = AnswerEvaluation(
+        query_id="q-1",
+        exact_match=None,
+        token_f1=None,
+        citation_presence=1.0,
+        citation_validity=1.0,
+        citation_precision=1.0,
+        citation_recall=1.0,
+        citation_coverage=1.0,
+        empty_answer=False,
+        required_fact_coverage=None,
+        latency_ms=20.0,
+        token_usage=None,
+        estimated_cost=None,
+        failure_type="unscored",
+    )
+
+    result = AnswerEvaluationResult((evaluation,))
+    payload = result.to_dict()
+
+    assert result.mean_exact_match is None
+    assert result.mean_token_f1 is None
+    assert result.mean_required_fact_coverage is None
+    assert payload["mean_citation_coverage"] == pytest.approx(1.0)
+    assert payload["mean_generation_latency_ms"] == pytest.approx(20.0)
+
+
+@pytest.mark.parametrize("length", [1, sys.maxsize])
+def test_result_rejects_empty_tuple_subclass_with_lying_length(
+    length: int,
+) -> None:
+    class LyingLength(tuple):  # type: ignore[type-arg]
+        def __len__(self) -> int:
+            return length
+
+    with pytest.raises(EvaluationError, match="must not be empty"):
+        AnswerEvaluationResult(LyingLength())
+
+
+def test_result_normalizes_tuple_subclass_evaluations() -> None:
+    evaluation = evaluate_answer(
+        AnswerReference("q-1", answerable=False),
+        _request(),
+        _output(""),
+    )
+
+    class LyingLength(tuple):  # type: ignore[type-arg]
+        def __len__(self) -> int:
+            return 5
+
+    result = AnswerEvaluationResult(LyingLength((evaluation,)))
+
+    assert type(result.evaluations) is tuple
+    assert len(result.evaluations) == 1
+    assert result.to_dict()["query_count"] == 1
+
+
+def test_result_reports_iteration_failure_during_normalization() -> None:
+    class BrokenIteration(tuple):  # type: ignore[type-arg]
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            yield object()
+            raise TypeError("boom")
+
+    with pytest.raises(EvaluationError, match="could not be iterated"):
+        AnswerEvaluationResult(BrokenIteration((object(),)))
+
+
+@pytest.mark.parametrize("value", [None, 0, False])
+def test_result_rejects_non_iterable_evaluations(value: object) -> None:
+    with pytest.raises(EvaluationError, match="must not be empty"):
+        AnswerEvaluationResult(value)  # type: ignore[arg-type]
 
 
 def test_result_rejects_non_evaluation_items() -> None:
