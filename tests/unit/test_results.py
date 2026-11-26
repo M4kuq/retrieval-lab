@@ -492,10 +492,16 @@ def test_load_result_validates_the_stored_int_value(tmp_path: Path) -> None:
         def __int__(self) -> int:
             return 5
 
+    class LyingLeInt(int):
+        def __le__(self, other: object) -> bool:
+            return False
+
     path = tmp_path / "result.json"
     path.write_text(json.dumps(_parsed_payload()), encoding="utf-8")
     with pytest.raises(EvaluationError, match="max_bytes must be a positive integer"):
         EvaluationResult.load_json(path, max_bytes=LyingIntInt(0))
+    with pytest.raises(EvaluationError, match="max_bytes must be a positive integer"):
+        EvaluationResult.load_json(path, max_bytes=LyingLeInt(0))
 
 
 def test_load_result_rejects_fifo_without_blocking(tmp_path: Path) -> None:
