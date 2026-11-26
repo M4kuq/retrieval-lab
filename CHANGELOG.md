@@ -13,6 +13,19 @@ cut.
 
 ### Removed
 
+- The `request <= 0` guard in the cache artifact `_read_bytes` loop,
+  which was unreachable. Its only caller passes a limit validated as a
+  positive integer, and the loop raises as soon as the accumulated data
+  exceeds that limit, so every iteration starts with
+  `len(data) <= limit` and the computed request is always at least 1;
+  the loop now asserts that invariant. `_cache_max_bytes` also
+  normalizes the limit to a plain `int` (real-type check plus
+  `int.__int__` extraction, before the range check), so an `int`
+  subclass overriding arithmetic, comparison or `__int__` — or an
+  object spoofing `__class__` — cannot break the invariant. Observable
+  behaviour is unchanged for plain integers, and the cache tests pin
+  the limit cases: growth after `fstat`, short reads, artifacts over
+  the byte limit, and an `int`-subclass limit.
 - The `relative_delta is None` guard in `_relative_regression`, which
   was unreachable through the public quality-gate APIs. Those APIs
   build their deltas only via `_metric_delta`, whose `_relative`
