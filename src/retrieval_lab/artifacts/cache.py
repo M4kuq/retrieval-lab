@@ -143,9 +143,12 @@ def dense_index_path(
 
 def _cache_max_bytes(value: int | None) -> int:
     limit = _MAX_CACHE_BYTES if value is None else value
-    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+    if type(limit) is bool or not issubclass(type(limit), int):
         raise EvaluationError("cache max_bytes must be a positive integer")
-    return limit
+    normalized = int.__int__(limit)
+    if normalized <= 0:
+        raise EvaluationError("cache max_bytes must be a positive integer")
+    return normalized
 
 
 def _atomic_write(
@@ -220,10 +223,7 @@ def _read_bytes(path: Path, limit: int) -> bytes:
         data = bytearray()
         while True:
             request = min(_READ_CHUNK_BYTES, limit + 1 - len(data))
-            if request <= 0:
-                raise _CacheReadLimitError(
-                    f"cache artifact exceeds max_bytes ({limit})"
-                )
+            assert request > 0
             block = os.read(descriptor, request)
             if not block:
                 return bytes(data)

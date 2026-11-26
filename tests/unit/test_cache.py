@@ -1004,6 +1004,47 @@ def test_cache_artifact_rejects_invalid_max_bytes(
         read_chunk_artifact(tmp_path, "a" * 64, max_bytes=max_bytes)  # type: ignore[arg-type]
 
 
+def test_cache_artifact_normalizes_int_subclass_max_bytes(tmp_path: Path) -> None:
+    class BrokenAddInt(int):
+        def __add__(self, other: object) -> int:
+            return 0
+
+    class LyingIntInt(int):
+        def __int__(self) -> int:
+            return 0
+
+    digest = "a" * 64
+    for limit in (BrokenAddInt(1024 * 1024), LyingIntInt(1024 * 1024)):
+        write_chunk_artifact(tmp_path, digest, [_chunk()], max_bytes=limit)
+
+        result = read_chunk_artifact(tmp_path, digest, max_bytes=limit)
+
+        assert result.status is CacheStatus.HIT
+
+
+def test_cache_artifact_rejects_class_spoofing_max_bytes(tmp_path: Path) -> None:
+    class Impostor:
+        @property
+        def __class__(self) -> type[int]:
+            return int
+
+    with pytest.raises(
+        EvaluationError, match="cache max_bytes must be a positive integer"
+    ):
+        read_chunk_artifact(tmp_path, "a" * 64, max_bytes=Impostor())  # type: ignore[arg-type]
+
+
+def test_cache_artifact_validates_the_stored_int_value(tmp_path: Path) -> None:
+    class LyingIntInt(int):
+        def __int__(self) -> int:
+            return 5
+
+    with pytest.raises(
+        EvaluationError, match="cache max_bytes must be a positive integer"
+    ):
+        read_chunk_artifact(tmp_path, "a" * 64, max_bytes=LyingIntInt(0))
+
+
 @pytest.mark.parametrize(
     ("chunks", "expected"),
     [
