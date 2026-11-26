@@ -521,9 +521,12 @@ def result_from_json(text: str) -> EvaluationResult:
 
 
 def _validate_max_bytes(max_bytes: object) -> int:
-    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+    if type(max_bytes) is bool or not issubclass(type(max_bytes), int):
         raise EvaluationError("max_bytes must be a positive integer")
-    return max_bytes
+    normalized = int.__int__(cast(int, max_bytes))
+    if normalized <= 0:
+        raise EvaluationError("max_bytes must be a positive integer")
+    return normalized
 
 
 class _ResultReadLimitError(EvaluationError):
@@ -542,8 +545,7 @@ def _read_bounded(path: Path, limit: int) -> bytes:
         data = bytearray()
         while True:
             request = min(_READ_CHUNK_BYTES, limit + 1 - len(data))
-            if request <= 0:
-                raise _ResultReadLimitError(f"result file exceeds max_bytes ({limit})")
+            assert request > 0
             block = os.read(descriptor, request)
             if not block:
                 return bytes(data)

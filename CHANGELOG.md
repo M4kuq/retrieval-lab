@@ -13,6 +13,19 @@ cut.
 
 ### Removed
 
+- The `request <= 0` guard in the result artifact `_read_bounded`
+  loop, which was unreachable for plain-integer limits. Its only
+  caller passes a limit validated as a positive integer, and the loop
+  raises as soon as the accumulated data exceeds that limit, so every
+  iteration starts with `len(data) <= limit` and the computed request
+  is always at least 1; the loop now asserts that invariant.
+  `_validate_max_bytes` also normalizes the limit to a plain `int`
+  (real-type check plus `int.__int__` extraction, before the range
+  check), so an `int` subclass overriding arithmetic, comparison or
+  `__int__` — or an object spoofing `__class__` — cannot break the
+  invariant. Observable behaviour is unchanged for plain integers, and
+  the result tests pin the limit cases: growth after `fstat`, short
+  reads, files over the byte limit, and an `int`-subclass limit.
 - The `request <= 0` guard in the cache artifact `_read_bytes` loop,
   which was unreachable. Its only caller passes a limit validated as a
   positive integer, and the loop raises as soon as the accumulated data

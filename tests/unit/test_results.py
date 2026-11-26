@@ -460,6 +460,50 @@ def test_load_result_detects_growth_after_fstat(
         EvaluationResult.load_json(path, max_bytes=1)
 
 
+def test_load_result_normalizes_int_subclass_max_bytes(tmp_path: Path) -> None:
+    class BrokenAddInt(int):
+        def __add__(self, other: object) -> int:
+            return 0
+
+    class LyingIntInt(int):
+        def __int__(self) -> int:
+            return 0
+
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(_parsed_payload()), encoding="utf-8")
+    for limit in (BrokenAddInt(1024 * 1024), LyingIntInt(1024 * 1024)):
+        assert EvaluationResult.load_json(path, max_bytes=limit).run_id == "run-日本語"
+
+
+def test_load_result_rejects_class_spoofing_max_bytes(tmp_path: Path) -> None:
+    class Impostor:
+        @property
+        def __class__(self) -> type[int]:
+            return int
+
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(_parsed_payload()), encoding="utf-8")
+    with pytest.raises(EvaluationError, match="max_bytes must be a positive integer"):
+        EvaluationResult.load_json(path, max_bytes=Impostor())  # type: ignore[arg-type]
+
+
+def test_load_result_validates_the_stored_int_value(tmp_path: Path) -> None:
+    class LyingIntInt(int):
+        def __int__(self) -> int:
+            return 5
+
+    class LyingLeInt(int):
+        def __le__(self, other: object) -> bool:
+            return False
+
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(_parsed_payload()), encoding="utf-8")
+    with pytest.raises(EvaluationError, match="max_bytes must be a positive integer"):
+        EvaluationResult.load_json(path, max_bytes=LyingIntInt(0))
+    with pytest.raises(EvaluationError, match="max_bytes must be a positive integer"):
+        EvaluationResult.load_json(path, max_bytes=LyingLeInt(0))
+
+
 def test_load_result_rejects_fifo_without_blocking(tmp_path: Path) -> None:
     if not hasattr(os, "mkfifo"):
         pytest.skip("named pipes are unavailable")
