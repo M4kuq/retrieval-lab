@@ -128,6 +128,12 @@ cut.
 
 ### Added
 
+- A test pinning the runner's warning-free latency path: with 20 or
+  more queries, `LatencyStats.from_samples` omits the low-sample p95
+  warning, so a full `EvaluationRunner` run reports empty latency
+  warnings and leaves every per-query warning tuple empty. Existing
+  runner tests all used fewer queries and only covered the warning
+  path.
 - Tests pinning relevance-grade ID validation in `EvaluationDataset`:
   empty, blank, or non-string grade IDs fail the preceding
   exact-match check, while a string-equal non-`str` key (such as

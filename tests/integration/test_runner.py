@@ -56,6 +56,35 @@ def test_quick_evaluate_runs_readme_vertical_slice(tmp_path: Path) -> None:
     assert json.loads(result.to_json())["run"]["id"] == result.run_id
 
 
+def test_runner_omits_latency_warnings_at_twenty_queries() -> None:
+    documents = [
+        Document(id=f"doc-{index}", text=f"shared unique{index:02d}")
+        for index in range(20)
+    ]
+    queries = [
+        EvaluationQuery(
+            id=f"q-{index}",
+            query=f"unique{index:02d}",
+            relevant_document_ids={f"doc-{index}"},
+        )
+        for index in range(20)
+    ]
+
+    result = EvaluationRunner(
+        documents=documents,
+        queries=queries,
+        strategies=["keyword"],
+        top_k=[1],
+    ).run()
+
+    assert result.metrics["keyword"].recall_at(1) == 1.0
+    assert result.latency["keyword"].sample_count == 20
+    assert result.latency["keyword"].warnings == ()
+    assert all(
+        evaluation.warnings == () for evaluation in result.query_results["keyword"]
+    )
+
+
 def test_runner_macro_averages_queries_and_normalizes_cutoffs() -> None:
     result = EvaluationRunner.quick_evaluate(
         documents=[
