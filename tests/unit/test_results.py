@@ -655,6 +655,39 @@ def test_result_from_dict_accepts_canonical_payload_shapes() -> None:
     assert with_latency.latency["keyword"].sample_count == 2
 
 
+def test_result_from_dict_groups_same_metric_by_distinct_cutoffs() -> None:
+    result = results_module.result_from_dict(_parsed_payload())
+
+    second = result.query_results["keyword"][1]
+    assert second.metrics_by_cutoff == {
+        1: {"hit_rate": 1.0, "recall": 1.0},
+        2: {"hit_rate": 1.0, "recall": 1.0},
+    }
+    aggregate = result.metrics["keyword"].metrics_by_cutoff
+    assert aggregate[1]["recall"] == 0.5
+    assert aggregate[2]["recall"] == 1.0
+
+
+def test_result_from_dict_rejects_noncanonical_metric_cutoff() -> None:
+    payload = _parsed_payload()
+    metrics = _first_query(payload)["metrics"]
+    metrics["recall@01"] = metrics.pop("recall@1")  # type: ignore[index,attr-defined]
+
+    with pytest.raises(EvaluationError, match="cutoff must be canonical decimal"):
+        results_module.result_from_dict(payload)
+
+
+def test_result_from_json_rejects_duplicate_metric_keys() -> None:
+    text = (
+        _result()
+        .to_json()
+        .replace('"recall@1": 0.5', '"recall@1": 0.5, "recall@1": 0.5', 1)
+    )
+
+    with pytest.raises(EvaluationError, match="duplicate JSON key"):
+        EvaluationResult.from_json(text)
+
+
 def _keyword(payload: dict[str, object]) -> dict[str, object]:
     return payload["retrievers"]["keyword"]  # type: ignore[index,return-value]
 

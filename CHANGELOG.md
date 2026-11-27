@@ -13,6 +13,17 @@ cut.
 
 ### Removed
 
+- The duplicate-metric guard in flattened result-metric parsing, which
+  was unreachable through `result_from_dict` and result JSON loading.
+  `_metric_key` accepts only keys with exactly one `@`, a non-empty
+  metric name and a canonical decimal cutoff, so an accepted raw key is
+  fully determined by its parsed (name, cutoff) pair and two distinct
+  mapping keys can never collide on the same pair; duplicate raw JSON
+  keys are already rejected while parsing. Observable behaviour is
+  unchanged, and the result tests pin that the same metric at distinct
+  cutoffs is grouped by cutoff, that a non-canonical cutoff such as
+  `recall@01` is rejected, and that duplicate raw JSON keys are
+  rejected.
 - The error-wrapping guard around `EvaluationQuery` construction in
   dataset record parsing, which was unreachable through
   `EvaluationDataset.from_jsonl`. Every constructor check is already

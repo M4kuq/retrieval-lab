@@ -154,10 +154,9 @@ def _flattened_metrics(value: object, path: str) -> dict[int, dict[str, float]]:
     result: dict[int, dict[str, float]] = {}
     for raw_key, raw_value in mapping.items():
         name, cutoff = _metric_key(raw_key, f"{path}.{raw_key}")
-        metrics = result.setdefault(cutoff, {})
-        if name in metrics:
-            raise EvaluationError(f"{path} contains duplicate metric {name!r}")
-        metrics[name] = _finite_number(raw_value, f"{path}.{raw_key}")
+        result.setdefault(cutoff, {})[name] = _finite_number(
+            raw_value, f"{path}.{raw_key}"
+        )
     return result
 
 
