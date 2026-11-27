@@ -13,6 +13,22 @@ cut.
 
 ### Removed
 
+- The error-wrapping guard around `EvaluationQuery` construction in
+  dataset record parsing, which was unreachable through
+  `EvaluationDataset.from_jsonl`. Every constructor check is already
+  enforced earlier in the same parser with the record's path and line:
+  the query ID, query text and relevant IDs pass the non-empty string
+  check, the relevant list is non-empty with duplicates rejected (so
+  the relevance set handed to the constructor is never empty), and the
+  metadata is already normalized to plain JSON values. Observable
+  behaviour is unchanged, and the dataset tests pin that a blank query
+  text, a blank relevant ID and relevant IDs that collide after NFC
+  normalization are rejected with the record's path and line.
+  `_validate_relevance_level` also returns the matched plain `str`
+  literal instead of the caller's object, so a `str` subclass with a
+  stateful `__eq__` cannot make the parser's later comparisons
+  disagree about the level; the dataset tests pin that such a level
+  is normalized before use.
 - The metric-shape mismatch guards in run comparison, which were
   unreachable through `compare_runs`. That entry point only proceeds
   when `check_comparability` reports the runs as comparable, and the

@@ -207,6 +207,63 @@ def test_from_jsonl_wraps_schema_errors_with_path_and_line(
     assert message in str(captured.value)
 
 
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        (
+            '{"query_id":"q-1","query":" ",'
+            '"relevant":[{"id":"doc-1","relevance":1}]}\n',
+            "query must be a non-empty string",
+        ),
+        (
+            '{"query_id":"q-1","query":"x","relevant":[{"id":" ","relevance":1}]}\n',
+            "relevant[0].id must be a non-empty string",
+        ),
+        (
+            '{"query_id":"q-1","query":"x","relevant":['
+            '{"id":"é","relevance":1},{"id":"é","relevance":2}]}\n',
+            "duplicate relevant ID",
+        ),
+    ],
+)
+def test_from_jsonl_rejects_records_the_query_constructor_would_reject(
+    tmp_path: Path, content: str, message: str
+) -> None:
+    source = _write(tmp_path / "bad.jsonl", content)
+
+    with pytest.raises(DatasetValidationError) as captured:
+        EvaluationDataset.from_jsonl(source)
+
+    assert f"{source}:1:" in str(captured.value)
+    assert message in str(captured.value)
+
+
+def test_from_jsonl_normalizes_str_subclass_relevance_level(tmp_path: Path) -> None:
+    class FirstComparisonOnlyStr(str):
+        def __init__(self, *_args: object) -> None:
+            self.comparisons = 0
+
+        def __eq__(self, other: object) -> bool:
+            self.comparisons += 1
+            return self.comparisons == 1
+
+        __hash__ = str.__hash__
+
+    source = _write(
+        tmp_path / "evaluation.jsonl",
+        '{"query_id":"q-1","query":"x","relevant":[{"id":"doc-1","relevance":1}]}\n',
+    )
+
+    dataset = EvaluationDataset.from_jsonl(
+        source,
+        relevance_level=FirstComparisonOnlyStr("document"),  # type: ignore[arg-type]
+    )
+
+    assert type(dataset.relevance_level) is str
+    assert dataset.relevance_level == "document"
+    assert dataset.queries[0].relevant_document_ids == frozenset({"doc-1"})
+
+
 def test_from_jsonl_rejects_duplicate_query_id_on_later_line(tmp_path: Path) -> None:
     record = (
         '{"query_id":"q-1","query":"query","relevant":[{"id":"doc-1","relevance":1}]}\n'

@@ -221,11 +221,11 @@ def _validate_queries(
 
 
 def _validate_relevance_level(value: object) -> RelevanceLevel:
-    if value not in ("document", "chunk"):
-        raise DatasetValidationError(
-            "relevance_level must be either 'document' or 'chunk'"
-        )
-    return value
+    if value == "document":
+        return "document"
+    if value == "chunk":
+        return "chunk"
+    raise DatasetValidationError("relevance_level must be either 'document' or 'chunk'")
 
 
 def _normalize_relevance_grades(
@@ -492,20 +492,17 @@ def _parse_dataset_record(
             line_number,
         )
 
-    try:
-        query = EvaluationQuery(
-            id=query_id,
-            query=query_text,
-            relevant_document_ids=(
-                frozenset(grades) if relevance_level == "document" else frozenset()
-            ),
-            relevant_chunk_ids=(
-                frozenset(grades) if relevance_level == "chunk" else frozenset()
-            ),
-            metadata=metadata,
-        )
-    except DatasetValidationError as exc:
-        raise _dataset_error(path, line_number, str(exc)) from exc
+    query = EvaluationQuery(
+        id=query_id,
+        query=query_text,
+        relevant_document_ids=(
+            frozenset(grades) if relevance_level == "document" else frozenset()
+        ),
+        relevant_chunk_ids=(
+            frozenset(grades) if relevance_level == "chunk" else frozenset()
+        ),
+        metadata=metadata,
+    )
     return query, MappingProxyType(grades), reference_answer
 
 
