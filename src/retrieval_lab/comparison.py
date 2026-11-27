@@ -963,13 +963,12 @@ def _metric_comparison(
                 if left_value is None or right_value is None:
                     continue
             else:
-                if (
-                    cutoff not in left_query.metrics_by_cutoff
-                    or cutoff not in right_query.metrics_by_cutoff
-                    or metric not in left_query.metrics_by_cutoff[cutoff]
-                    or metric not in right_query.metrics_by_cutoff[cutoff]
-                ):
-                    continue
+                assert (
+                    cutoff in left_query.metrics_by_cutoff
+                    and cutoff in right_query.metrics_by_cutoff
+                    and metric in left_query.metrics_by_cutoff[cutoff]
+                    and metric in right_query.metrics_by_cutoff[cutoff]
+                )
                 left_value = left_query.metrics_by_cutoff[cutoff][metric]
                 right_value = right_query.metrics_by_cutoff[cutoff][metric]
             query_deltas.append(
@@ -1036,9 +1035,9 @@ def compare_runs(
         baseline_queries = _result_query_map(baseline, retriever)
         candidate_queries = _result_query_map(candidate, retriever)
         values: list[MetricComparison] = []
+        candidate_shape = _aggregate_metric_shape(candidate, retriever)
         for metric, cutoff in _aggregate_metric_shape(baseline, retriever):
-            if (metric, cutoff) not in _aggregate_metric_shape(candidate, retriever):
-                continue
+            assert (metric, cutoff) in candidate_shape
             values.append(
                 _metric_comparison(
                     retriever=retriever,

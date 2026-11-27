@@ -13,6 +13,19 @@ cut.
 
 ### Removed
 
+- The metric-shape mismatch guards in run comparison, which were
+  unreachable through `compare_runs`. That entry point only proceeds
+  when `check_comparability` reports the runs as comparable, and the
+  comparability check blocks on any aggregate metric-shape difference
+  between the two runs and on any per-query shape that differs from
+  its run's aggregate shape, so every compared metric/cutoff is
+  present in both aggregate shapes and in every common query. The
+  aggregate loop and the per-query loop in `_metric_comparison` now
+  assert those invariants (the candidate aggregate shape is also
+  computed once per retriever instead of once per metric).
+  Observable behaviour is unchanged, and the comparison tests pin
+  that `compare_runs` raises `IncomparableRunError` for both an
+  aggregate shape mismatch and a per-query shape mismatch.
 - The empty-values guard in answer evaluation `_mean`, which was
   unreachable through its only callers once the result constructor
   normalizes its input. `AnswerEvaluationResult.__post_init__` now

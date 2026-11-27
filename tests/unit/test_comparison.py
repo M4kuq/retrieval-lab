@@ -388,6 +388,47 @@ def test_metric_shape_mismatch_is_blocking() -> None:
     assert any("metric_shape" in issue.field for issue in report.issues)
 
 
+def test_compare_runs_rejects_per_query_shape_mismatch() -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)})
+    altered_query = QueryEvaluation(
+        query_id="q1",
+        retrieved_ids=(),
+        metrics_by_cutoff={1: {"recall": 0.2}},
+    )
+    candidate = _result({"bm25": (0.2, 0.4, 0.6)})
+    candidate = EvaluationResult(
+        run_id=candidate.run_id,
+        metrics=candidate.metrics,
+        query_results={"bm25": (altered_query, *candidate.query_results["bm25"][1:])},
+        manifest=candidate.manifest,
+    )
+
+    with pytest.raises(IncomparableRunError):
+        compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_aggregate_shape_mismatch() -> None:
+    baseline = _result({"bm25": (0.2, 0.4, 0.6)})
+    candidate_base = _result({"bm25": (0.2, 0.4, 0.6)})
+    queries = tuple(
+        QueryEvaluation(
+            query_id=query.query_id,
+            retrieved_ids=(),
+            metrics_by_cutoff={1: {"mrr": 0.5}, 3: {"mrr": 0.5}},
+        )
+        for query in candidate_base.query_results["bm25"]
+    )
+    candidate = EvaluationResult(
+        run_id=candidate_base.run_id,
+        metrics={"bm25": RetrieverMetrics({1: {"mrr": 0.5}, 3: {"mrr": 0.5}})},
+        query_results={"bm25": queries},
+        manifest=candidate_base.manifest,
+    )
+
+    with pytest.raises(IncomparableRunError):
+        compare_runs(baseline, candidate)
+
+
 def test_matching_runs_with_internal_aggregate_shape_mismatch_are_blocked() -> None:
     source = _result({"bm25": (0.2, 0.4, 0.6)})
     metrics = {"bm25": RetrieverMetrics({1: {"recall": 0.4}})}
