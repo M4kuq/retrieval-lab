@@ -164,10 +164,7 @@ def _load_text(path: Path, *, source: str) -> Document:
     text = _normalize_text(_read_utf8(path))
     if not text.strip():
         raise CorpusValidationError(f"{path}:1: document text must not be empty")
-    try:
-        return Document(id=source, text=text, source=source)
-    except CorpusValidationError as exc:
-        raise CorpusValidationError(f"{path}:1: {exc}") from exc
+    return Document(id=source, text=text, source=source)
 
 
 def _load_jsonl(path: Path, *, source: str) -> tuple[Document, ...]:

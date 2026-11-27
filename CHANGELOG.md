@@ -13,6 +13,17 @@ cut.
 
 ### Removed
 
+- The error-wrapping guard around `Document` construction in text
+  corpus loading, which was unreachable through `load_documents`. The
+  loader is the only caller and hands the constructor a source taken
+  from `_relative_source` (the file's relative path, which always
+  contains its supported suffix and is never blank), text it has just
+  checked is non-empty after normalization, and the default empty
+  metadata mapping, so every constructor check is already satisfied.
+  Observable behaviour is unchanged, and the loader tests pin that a
+  text file loads with its relative source as both ID and source with
+  newline and NFC normalization applied, and that a blank text file is
+  rejected with its path and line.
 - The error-wrapping guard around `EvaluationQuery` construction in
   dataset record parsing, which was unreachable through
   `EvaluationDataset.from_jsonl`. Every constructor check is already

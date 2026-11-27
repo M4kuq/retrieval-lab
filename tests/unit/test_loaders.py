@@ -134,6 +134,33 @@ def test_load_rejects_empty_text_file(tmp_path: Path) -> None:
         load_documents(source)
 
 
+def test_load_text_file_uses_relative_source_as_id_and_normalizes(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    source = nested / "doc.txt"
+    source.write_bytes("cafe\u0301\r\nsecond line".encode())
+
+    documents = load_documents(tmp_path)
+
+    assert len(documents) == 1
+    assert documents[0].id == "nested/doc.txt"
+    assert documents[0].source == "nested/doc.txt"
+    assert documents[0].text == "café\nsecond line"
+    assert documents[0].metadata == {}
+
+
+def test_load_rejects_empty_text_file_with_path_and_line(tmp_path: Path) -> None:
+    source = tmp_path / "blank.txt"
+    source.write_text("  \n", encoding="utf-8")
+
+    with pytest.raises(CorpusValidationError) as captured:
+        load_documents(source)
+
+    assert str(captured.value) == f"{source}:1: document text must not be empty"
+
+
 def test_load_rejects_non_utf8_with_line(tmp_path: Path) -> None:
     source = tmp_path / "bad.txt"
     source.write_bytes(b"valid\n\xff")
