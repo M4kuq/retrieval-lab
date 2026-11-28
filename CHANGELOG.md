@@ -7,6 +7,18 @@ Versioning once the first public release is published.
 
 ## [Unreleased]
 
+### Added
+
+- `SentenceBoundaryChunker`, a second chunking strategy that packs
+  Japanese and English sentences up to a character size limit and
+  repeats trailing sentences within an overlap character budget.
+  It is selectable from typed and YAML configuration as the
+  `sentence_boundary` chunker type and is accepted by
+  `EvaluationRunner` alongside `FixedSizeChunker`. Run manifests now
+  record the chunker type under `chunking.type`, and the chunk hash
+  settings include it, so result files written before this change are
+  not comparable with new runs.
+
 Changes since 0.1.0rc1, developed under the internal v0.2–v0.4 milestones.
 The package version remains 0.1.0rc1 until the next release candidate is
 cut.

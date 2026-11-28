@@ -34,7 +34,7 @@ from retrieval_lab.benchmarks import (
     load_natural_questions_dataset,
 )
 from retrieval_lab.checkpointing import EvaluationCheckpoint, run_with_checkpoint
-from retrieval_lab.chunkers import FixedSizeChunker
+from retrieval_lab.chunkers import FixedSizeChunker, SentenceBoundaryChunker
 from retrieval_lab.comparison import (
     BootstrapDelta,
     ComparabilityIssue,
@@ -284,6 +284,7 @@ __all__ = [
     "RetrieverMetrics",
     "RunComparison",
     "SearchResult",
+    "SentenceBoundaryChunker",
     "SyntheticGenerateCallable",
     "SyntheticQueryGenerator",
     "ValidationResult",

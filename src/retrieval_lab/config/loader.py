@@ -323,7 +323,7 @@ def _parse_corpus(value: object, base: Path, errors: _Errors) -> CorpusConfig | 
     overlap = 64 if overlap_value is None else overlap_value
     try:
         chunker = ChunkerConfig(
-            type=cast(Literal["recursive_characters"], chunk_type),
+            type=cast(Literal["recursive_characters", "sentence_boundary"], chunk_type),
             size=size,
             overlap=overlap,
         )
@@ -331,7 +331,7 @@ def _parse_corpus(value: object, base: Path, errors: _Errors) -> CorpusConfig | 
         errors.add(
             "corpus.chunker",
             str(exc),
-            "use recursive_characters with 0 <= overlap < size",
+            "use recursive_characters or sentence_boundary with 0 <= overlap < size",
         )
         chunker = ChunkerConfig()
     include_value = data.get("include", [])

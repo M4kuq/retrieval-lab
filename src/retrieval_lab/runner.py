@@ -24,7 +24,7 @@ from retrieval_lab.artifacts.cache import (
     write_chunk_artifact,
     write_dense_index_artifact,
 )
-from retrieval_lab.chunkers import FixedSizeChunker
+from retrieval_lab.chunkers import FixedSizeChunker, SentenceBoundaryChunker
 from retrieval_lab.datasets import EvaluationDataset, RelevanceLevel
 from retrieval_lab.domain import (
     Chunk,
@@ -69,6 +69,8 @@ from retrieval_lab.retrievers import (
 if TYPE_CHECKING:
     from retrieval_lab.config import RetrievalConfig
 
+AnyChunker = FixedSizeChunker | SentenceBoundaryChunker
+
 DEFAULT_CACHE_MAX_BYTES = CACHE_MAX_BYTES
 
 
@@ -84,7 +86,7 @@ class EvaluationRunner:
         retrievers: Sequence[BaseRetriever] | None = None,
         strategies: Sequence[str] | None = None,
         top_k: Sequence[int] = (1, 3, 5, 10),
-        chunker: FixedSizeChunker | None = None,
+        chunker: AnyChunker | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
         cache_max_bytes: int = DEFAULT_CACHE_MAX_BYTES,
         seed: int = 42,
@@ -118,8 +120,10 @@ class EvaluationRunner:
         self._top_k = normalize_top_k(top_k)
         self._seed = _validate_seed(seed)
         self._chunker = FixedSizeChunker() if chunker is None else chunker
-        if not isinstance(self._chunker, FixedSizeChunker):
-            raise ConfigurationError("chunker must be a FixedSizeChunker")
+        if not isinstance(self._chunker, (FixedSizeChunker, SentenceBoundaryChunker)):
+            raise ConfigurationError(
+                "chunker must be a FixedSizeChunker or SentenceBoundaryChunker"
+            )
         self._retrievers = _resolve_retrievers(retrievers, strategies)
         self._cache_max_bytes = _validate_cache_max_bytes(cache_max_bytes)
         if cache_dir is None:
@@ -196,9 +200,16 @@ class EvaluationRunner:
                 retriever_by_name[item.name] for item in config.retrievers
             ),
             top_k=config.evaluation.top_k,
-            chunker=FixedSizeChunker(
-                size=config.corpus.chunker.size,
-                overlap=config.corpus.chunker.overlap,
+            chunker=(
+                SentenceBoundaryChunker(
+                    size=config.corpus.chunker.size,
+                    overlap=config.corpus.chunker.overlap,
+                )
+                if config.corpus.chunker.type == "sentence_boundary"
+                else FixedSizeChunker(
+                    size=config.corpus.chunker.size,
+                    overlap=config.corpus.chunker.overlap,
+                )
             ),
             cache_dir=config.cache_dir,
             seed=config.experiment.seed,
@@ -234,7 +245,7 @@ class EvaluationRunner:
         retrievers: Sequence[BaseRetriever] | None = None,
         strategies: Sequence[str] | None = None,
         top_k: Sequence[int] = (1, 3, 5, 10),
-        chunker: FixedSizeChunker | None = None,
+        chunker: AnyChunker | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
         cache_max_bytes: int = DEFAULT_CACHE_MAX_BYTES,
         seed: int = 42,
@@ -839,7 +850,7 @@ def _build_manifest(
     chunks: Sequence[Chunk],
     retrievers: Sequence[BaseRetriever],
     top_k: Sequence[int],
-    chunker: FixedSizeChunker,
+    chunker: AnyChunker,
     relevance_level: RelevanceLevel,
     relevance_grades_by_query: Mapping[str, Mapping[str, int]],
     seed: int = 42,
@@ -875,7 +886,7 @@ def _build_manifest(
         {
             "chunks": chunks_payload,
             "corpus_hash": corpus_hash,
-            "settings": {"overlap": chunker.overlap, "size": chunker.size},
+            "settings": _chunker_settings(chunker),
         }
     )
     if chunk_hash is not None and chunk_hash != calculated_chunk_hash:
@@ -913,7 +924,7 @@ def _build_manifest(
     manifest: dict[str, JSONValue] = {
         "chunk_count": len(chunks),
         "chunk_hash": chunk_hash,
-        "chunking": {"overlap": chunker.overlap, "size": chunker.size},
+        "chunking": _chunker_settings(chunker),
         "corpus_hash": corpus_hash,
         "dataset_hash": dataset_hash,
         "document_count": len(documents),
@@ -946,6 +957,18 @@ def _build_manifest(
     return manifest, run_id
 
 
+def _chunker_settings(chunker: AnyChunker) -> dict[str, JSONValue]:
+    return {
+        "overlap": chunker.overlap,
+        "size": chunker.size,
+        "type": (
+            "sentence_boundary"
+            if isinstance(chunker, SentenceBoundaryChunker)
+            else "recursive_characters"
+        ),
+    }
+
+
 def _json_values(values: Sequence[str | int]) -> list[JSONValue]:
     result: list[JSONValue] = []
     result.extend(values)
@@ -956,7 +979,7 @@ def _chunk_hash(
     *,
     documents: Sequence[Document],
     chunks: Sequence[Chunk],
-    chunker: FixedSizeChunker,
+    chunker: AnyChunker,
 ) -> str:
     """Return the same content hash recorded in the deterministic manifest."""
 
@@ -984,7 +1007,7 @@ def _chunk_hash(
         {
             "chunks": chunks_payload,
             "corpus_hash": corpus_hash,
-            "settings": {"overlap": chunker.overlap, "size": chunker.size},
+            "settings": _chunker_settings(chunker),
         }
     )
 

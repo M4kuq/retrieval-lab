@@ -29,6 +29,7 @@ Retrievers and chunking:
   `HybridRetriever`
 - `EmbeddingBackend`, `EmbeddingModelMetadata`
 - `FixedSizeChunker`
+- `SentenceBoundaryChunker`
 
 Callable retriever adapters:
 
@@ -306,7 +307,8 @@ under `manifest["config"]` without absolute paths. Runtime paths and report-outp
 choices do not change the deterministic run ID.
 
 The v0.1 YAML adapter supports the fixed character chunker exposed as
-`recursive_characters`, native evaluation JSONL, canonical built-in retriever
+`recursive_characters` and the sentence-boundary chunker exposed as
+`sentence_boundary`, native evaluation JSONL, canonical built-in retriever
 names, RRF Hybrid references, and all six implemented metrics. The YAML runner
 remains the synchronous built-in-index entry point; async
 external retrieval uses the explicit callable API above. Report and
