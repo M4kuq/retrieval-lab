@@ -776,7 +776,10 @@ def test_runner_rejects_non_dataset_dataset_argument() -> None:
 
 
 def test_runner_rejects_non_fixed_size_chunker() -> None:
-    with pytest.raises(ConfigurationError, match="must be a FixedSizeChunker"):
+    with pytest.raises(
+        ConfigurationError,
+        match="must be a FixedSizeChunker or SentenceBoundaryChunker",
+    ):
         EvaluationRunner(
             documents=_valid_documents(),
             queries=_valid_queries(),

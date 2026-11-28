@@ -35,6 +35,7 @@ Index-backed retrievers that share one chunk artifact per run.
 - `EmbeddingBackend` — Typed embedding service used by DenseRetriever.
 - `EmbeddingModelMetadata` — Identity and reproducibility metadata for an embedding backend.
 - `FixedSizeChunker` — Split documents into deterministic, overlapping character chunks.
+- `SentenceBoundaryChunker` — Split documents into chunks that end on sentence boundaries.
 
 ## Callable retriever adapters
 

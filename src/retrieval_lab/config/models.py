@@ -16,7 +16,7 @@ from typing import Literal, TypeAlias
 from retrieval_lab.domain import JSONValue
 from retrieval_lab.exceptions import ConfigurationError
 
-ChunkerType = Literal["recursive_characters"]
+ChunkerType = Literal["recursive_characters", "sentence_boundary"]
 DatasetFormat = Literal["native_jsonl"]
 RelevanceLevel = Literal["document", "chunk"]
 RetrieverType = Literal["keyword", "bm25", "dense", "hybrid"]
@@ -98,9 +98,10 @@ class ChunkerConfig:
     overlap: int = 64
 
     def __post_init__(self) -> None:
-        if self.type != "recursive_characters":
+        if self.type not in ("recursive_characters", "sentence_boundary"):
             raise ConfigurationError(
-                "corpus.chunker.type must be 'recursive_characters'"
+                "corpus.chunker.type must be 'recursive_characters' "
+                "or 'sentence_boundary'"
             )
         size = _positive(self.size, "corpus.chunker.size")
         overlap = _non_negative(self.overlap, "corpus.chunker.overlap")
